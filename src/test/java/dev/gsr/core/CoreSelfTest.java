@@ -205,6 +205,34 @@ public final class CoreSelfTest {
             check(h.transmittance > 0.99f && h.steps <= 6,
                     "briques vides franchies sans lire les cellules (" + h.steps + " pas pour 20 blocs, T=" + h.transmittance + ")");
 
+            {   // Le masque ne doit changer que le nombre de pas, jamais ce qui est touché.
+                java.util.Random rnd = new java.util.Random(42);
+                int diff = 0, capped = 0, total = 4000; String first = null;
+                for (int i = 0; i < total; i++) {
+                    float rx = (float) rnd.nextGaussian(), ry = (float) rnd.nextGaussian(), rz = (float) rnd.nextGaussian();
+                    float rl = (float) Math.sqrt(rx * rx + ry * ry + rz * rz);
+                    float ox = rnd.nextFloat() * 40 - 20, oy = rnd.nextFloat() * 10 - 5.4f, oz = rnd.nextFloat() * 40 - 20; // oy : dans l'air (sol à -5.5)
+                    float cone = rnd.nextBoolean() ? 0 : rnd.nextFloat() * 0.35f;
+                    gpu.ignoreBrickMask = true;
+                    CpuReferenceTracer.Hit a = gpu.trace(ox, oy, oz, rx / rl, ry / rl, rz / rl, 0.02f, 300, cone, 0);
+                    gpu.ignoreBrickMask = false;
+                    CpuReferenceTracer.Hit b = gpu.trace(ox, oy, oz, rx / rl, ry / rl, rz / rl, 0.02f, 300, cone, 0);
+                    // Même impact visible : tous deux touchés ou non (T 0,5), même distance, même couleur.
+                    boolean same = (a.transmittance < 0.5f) == (b.transmittance < 0.5f)
+                            && Math.abs(a.transmittance - b.transmittance) < 0.1f && Math.abs(a.g - b.g) < 0.05f
+                            && (a.transmittance > 0.9f || Math.abs(a.hitDist - b.hitDist) < 0.25f);
+                    if (a.steps >= 160 && b.transmittance < 0.5f && a.transmittance > 0.5f) capped++;
+                    if (!same && a.steps < 160) {
+                        diff++;
+                        if (first == null) first = String.format("o=(%.2f,%.2f,%.2f) d=(%.3f,%.3f,%.3f) cone=%.2f : sans masque T=%.3f dist=%.2f L=%d, avec T=%.3f dist=%.2f L=%d",
+                                ox, oy, oz, rx / rl, ry / rl, rz / rl, cone, a.transmittance, a.hitDist, a.level, b.transmittance, b.hitDist, b.level);
+                    }
+                }
+                check(diff == 0, "masque de briques : mêmes impacts qu'en parcours cellule par cellule (" + diff + "/" + total + " écarts)"
+                        + (first == null ? "" : "\n         ex. " + first));
+                System.out.println("  (rayons à 160 pas sans masque, qui touchent désormais : " + capped + ")");
+            }
+
             h = gpu.trace(0, 0, 0, 0, -1, 0, 0.05f, 300, 0.5f, 0);
             check(Math.abs(h.hitDist - 5.5f) < 1.5f && h.transmittance < 0.1f,
                     String.format("cône rugueux (tan=0.5) : sol trouvé à un niveau plus grossier (dist=%.2f, L=%d)", h.hitDist, h.level));

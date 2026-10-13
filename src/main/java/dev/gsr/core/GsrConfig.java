@@ -50,6 +50,12 @@ public final class GsrConfig {
     /** Distance max (blocs) d'un rayon GSR. */
     public float maxTraceDistance = 384f;
 
+    // ---- Debug (non persistant, /gsr debug et /gsr bricks) ----
+    /** 0 = normal, 1 = SSR seul (ciel en repli, sans GSR), 2 = GSR seul (sans SSR). */
+    public int debugView = 0;
+    /** Faux = parcours cellule par cellule (frame.iparams.y bit 0), pour mesurer le gain du masque. */
+    public boolean brickMask = true;
+
     public long debounceForLevel(int level) {
         long d = coarseDebounceMs;
         for (int i = 1; i < level; i++) d *= 3;

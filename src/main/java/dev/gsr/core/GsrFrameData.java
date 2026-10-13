@@ -9,7 +9,7 @@ import java.nio.ByteBuffer;
  *  vec4  camFrac;       // xyz = partie fractionnaire,     w = nombre de niveaux
  *  ivec4 pageDims;      // xyz = pages par niveau,         w = slots par niveau
  *  ivec4 windowMin[4];  // coin min de chaque fenêtre (coord. de page)
- *  ivec4 iparams;       // x = maxSplatsPerPage
+ *  ivec4 iparams;       // x = maxSplatsPerPage, y bit 0 = ignorer le masque de briques (debug)
  *  vec4  sunDir;        // xyz normalisé,                  w = intensité ciel (jour/nuit)
  *  vec4  sunColor;
  *  vec4  skyZenith;
@@ -44,7 +44,7 @@ public final class GsrFrameData {
             int[] m = L < cfg.levels ? clipmap.windowMin(L) : new int[]{GsrLayout.INVALID_PAGE_COORD, 0, 0};
             b.putInt(m[0]).putInt(m[1]).putInt(m[2]).putInt(0);
         }
-        b.putInt(cfg.maxSplatsPerPage).putInt(0).putInt(0).putInt(0);
+        b.putInt(cfg.maxSplatsPerPage).putInt(cfg.brickMask ? 0 : 1).putInt(0).putInt(0);
         vec4(b, sunDir, skyBrightness);
         vec4(b, sunColor, 0f);
         vec4(b, skyZenith, 0f);

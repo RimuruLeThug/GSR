@@ -12,6 +12,7 @@ layout(binding = 1) uniform sampler2D uSceneColor;
 layout(rgba16f, binding = 0) writeonly uniform image2D uReflOut;
 
 uniform float uMaxTrace;
+uniform int   uDebugView;   // 0 normal, 1 SSR seul (ciel en repli), 2 GSR seul
 
 const int SSR_STEPS  = 48;
 const int SSR_REFINE = 6;
@@ -89,14 +90,17 @@ void main() {
     // ---- 1) SSR (précis, mais limité à ce que la caméra voit) ----
     vec3 rV = normalize(mat3(uView) * R);
     vec2 hitUV; float ssrDist;
-    float conf = ssrTrace(vp + nV * 0.02, rV, px, hitUV, ssrDist);
+    float conf = uDebugView == 2 ? 0.0 : ssrTrace(vp + nV * 0.02, rV, px, hitUV, ssrDist);
     vec3 ssrCol = conf > 0.0 ? pow(textureLod(uSceneColor, hitUV, 0.0).rgb, vec3(2.2)) : vec3(0.0);
 
     vec3  col  = ssrCol;
     float dist = ssrDist;
 
     // ---- 2) Repli GSR : la scène à 360° autour du joueur, hors écran ou occultée ----
-    if (conf < 0.999) {
+    if (conf < 0.999 && uDebugView == 1) {
+        col  = mix(gsrSkyRadiance(R), ssrCol, conf);
+        dist = mix(uMaxTrace, ssrDist, conf);
+    } else if (conf < 0.999) {
         // Rugosité -> demi-angle du cône -> niveau de clipmap (reflet flou = splats plus gros = moins de pas)
         float coneTan = mix(0.002, 0.35, alpha);
         GsrHit gh = gsrTrace(P + N * 0.05, R, 0.02, uMaxTrace, coneTan, 0.0);

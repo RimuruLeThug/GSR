@@ -1,6 +1,7 @@
 package dev.gsr;
 
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import dev.gsr.compat.IrisCompat;
 import dev.gsr.core.GaussianChunkManager;
 import dev.gsr.core.GsrConfig;
@@ -10,6 +11,7 @@ import dev.gsr.render.GsrRenderer;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -75,10 +77,32 @@ public final class GsrClient implements ClientModInitializer {
                                     CONFIG.standaloneResolutionScale = IntegerArgumentType.getInteger(c, "factor");
                                     c.getSource().sendFeedback(Text.literal("GSR : reflet en 1/" + CONFIG.standaloneResolutionScale + " de résolution"));
                                     return 1;
-                                })))));
+                                })))
+                        // /gsr debug normal|ssr|gsr : isole la source du reflet (diagnostic d'artefacts)
+                        .then(ClientCommandManager.literal("debug")
+                                .then(debugView("normal", 0)).then(debugView("ssr", 1)).then(debugView("gsr", 2)))
+                        // /gsr bricks on|off : masque de briques (mesure avant/après au même endroit)
+                        .then(ClientCommandManager.literal("bricks")
+                                .then(brickToggle("on", true)).then(brickToggle("off", false)))));
 
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(() -> ensureWorld(null)));
         LOG.info("GSR (Gaussian Space Reflections) initialisé");
+    }
+
+    private static LiteralArgumentBuilder<FabricClientCommandSource> debugView(String name, int mode) {
+        return ClientCommandManager.literal(name).executes(c -> {
+            CONFIG.debugView = mode;
+            c.getSource().sendFeedback(Text.literal("GSR : vue de debug « " + name + " »"));
+            return 1;
+        });
+    }
+
+    private static LiteralArgumentBuilder<FabricClientCommandSource> brickToggle(String name, boolean on) {
+        return ClientCommandManager.literal(name).executes(c -> {
+            CONFIG.brickMask = on;
+            c.getSource().sendFeedback(Text.literal("GSR : masque de briques " + (on ? "activé" : "désactivé (cellule par cellule)")));
+            return 1;
+        });
     }
 
     /** Contenu de /gsr stats (thread client). */

@@ -32,7 +32,7 @@ struct GsrFrame {
     vec4  camFrac;                     // xyz fraction,    w nombre de niveaux
     ivec4 pageDims;                    // xyz pages/niveau, w slots/niveau
     ivec4 windowMin[GSR_MAX_LEVELS];   // coin min de chaque fenêtre (coord. de page)
-    ivec4 iparams;                     // x maxSplatsPerPage
+    ivec4 iparams;                     // x maxSplatsPerPage, y bit 0 = ignorer le masque de briques (debug)
     vec4  sunDir;                      // xyz, w intensité du ciel
     vec4  sunColor;
     vec4  skyZenith;
@@ -146,6 +146,7 @@ GsrHit gsrTrace(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float c
 
     int   levels    = int(gsrFrame.camFrac.w);
     uint  maxSplats = uint(gsrFrame.iparams.x);
+    bool  noMask    = (gsrFrame.iparams.y & 1) != 0;
     vec3  invD      = gsrSafeInv(rd);
     float hitW = 0.0, hitAcc = 0.0;
     float t = tMin;
@@ -174,7 +175,7 @@ GsrHit gsrTrace(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float c
         ivec3 brick = cell >> 1;
         int   bi    = brick.x + 4 * (brick.y + 4 * brick.z);
         uint  bits  = bi < 32 ? meta.mask.x : meta.mask.y;
-        bool  occupied = valid && ((bits >> uint(bi & 31)) & 1u) != 0u;
+        bool  occupied = valid && (noMask || ((bits >> uint(bi & 31)) & 1u) != 0u);
 
         // Boîte à franchir : cellule (brique occupée), brique vide (4³ voxels) ou page entière.
         ivec3 boxMin = occupied ? (page * 16 + cell * 2) * vs : valid ? (page * 16 + brick * 4) * vs : page * 16 * vs;
@@ -183,6 +184,9 @@ GsrHit gsrTrace(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float c
         vec3  t0 = (bmin - ro) * invD, t1 = (bmin + boxSize - ro) * invD;
         vec3  tf = max(t0, t1);
         float tExit = min(min(tf.x, tf.y), tf.z);
+        // Un saut à vide ne franchit pas la distance où l'empreinte du cône dépasse 2^L : au-delà, le
+        // niveau L+1 doit être consulté, et il peut avoir du contenu dans la zone sautée.
+        if (!occupied && coneTan > 0.0) tExit = min(tExit, max((float(vs) - coneBase) / coneTan, t));
 
         if (occupied) {
             uint c = gsrCells[uint(slot) * 512u + uint(cell.x + 8 * (cell.y + 8 * cell.z))];

@@ -203,6 +203,7 @@ public final class GsrRenderer {
             glUseProgram(progReflect);
             setCommon(progReflect, proj, invProj, view, invView, w, h, cfg);
             set1f(progReflect, "uMaxTrace", cfg.maxTraceDistance);
+            glUniform1i(loc(progReflect, "uDebugView"), cfg.debugView);
             bindTex(0, depthTex);
             bindTex(1, fb.getColorAttachment());
             glBindImageTexture(0, targets.reflection, 0, false, 0, GL_WRITE_ONLY, GL_RGBA16F);

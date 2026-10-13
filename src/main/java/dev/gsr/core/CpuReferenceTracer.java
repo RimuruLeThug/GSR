@@ -17,6 +17,8 @@ public final class CpuReferenceTracer implements GpuSink {
     private final ByteBuffer splats;
     public GsrFrameData frame = new GsrFrameData();
     public int[][] windowMin = new int[GsrLayout.MAX_LEVELS][3];
+    /** = frame.iparams.y bit 0 : parcours cellule par cellule (comportement d'avant le masque de briques). */
+    boolean ignoreBrickMask;
 
     public CpuReferenceTracer(GsrConfig cfg) {
         this.cfg = cfg;
@@ -95,7 +97,7 @@ public final class CpuReferenceTracer implements GpuSink {
             int brx = cx >> 1, bry = cy >> 1, brz = cz >> 1;
             int bi = brx + 4 * (bry + 4 * brz);
             int bits = bi < 32 ? meta[slot * 8 + 4] : meta[slot * 8 + 5];
-            boolean occupied = valid && ((bits >>> (bi & 31)) & 1) != 0;
+            boolean occupied = valid && (ignoreBrickMask || ((bits >>> (bi & 31)) & 1) != 0);
             int mx, my, mz; float size;
             if (occupied) { mx = (pgx * 16 + cx * 2) * vs; my = (pgy * 16 + cy * 2) * vs; mz = (pgz * 16 + cz * 2) * vs; size = 2 * vs; }
             else if (valid) { mx = (pgx * 16 + brx * 4) * vs; my = (pgy * 16 + bry * 4) * vs; mz = (pgz * 16 + brz * 4) * vs; size = 4 * vs; }
@@ -105,6 +107,9 @@ public final class CpuReferenceTracer implements GpuSink {
             float tfy = Math.max((bminY - oy) * iy, (bminY + size - oy) * iy);
             float tfz = Math.max((bminZ - oz) * iz, (bminZ + size - oz) * iz);
             float tExit = Math.min(Math.min(tfx, tfy), tfz);
+            // Un saut à vide ne franchit pas la distance où l'empreinte du cône dépasse 2^L : au-delà, le
+            // niveau L+1 doit être consulté, et il peut avoir du contenu dans la zone sautée.
+            if (!occupied && coneTan > 0f) tExit = Math.min(tExit, Math.max((vs - coneBase) / coneTan, t));
 
             if (occupied) {
                 int c = cells[slot * 512 + cx + 8 * (cy + 8 * cz)];
