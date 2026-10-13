@@ -250,6 +250,12 @@ représentant dans la passe reflet et le relire, au lieu de le recalculer.
   différentes d'une frame à l'autre était une cause probable. Diagnostic prévu :
   `/gsr bricks off`, puis `/gsr scale 1`, pour isoler la cause. Une mesure objective est possible :
   plusieurs captures caméra immobile, puis différence des pixels de l'eau.
+* **Mesure objective du 2026-10-13 (caméra figée, commit suivant `7058515`)** : rafales de 8 captures
+  à un tick d'intervalle (`-PgsrAutoshot`, puis `java tools/FlickerDiff.java ...`), zone d'eau, part des
+  pixels dont l'amplitude temporelle dépasse 16/255 : mod coupé 1,49 % (animation de l'eau vanilla),
+  défaut 0,30 %, sans briques 0,32 %, pleine résolution 1,04 %, GSR seul 0,25 %. **Caméra immobile, le
+  mod ne scintille pas** (il lisse même l'animation). Reste à vérifier en mouvement, où la reprojection
+  temporelle intervient : la mesure automatique ne le couvre pas.
 * **« Nuage » de pixels verts au-dessus de l'eau** quand la caméra est presque au ras de l'eau (capture
   utilisateur 17:35). Probablement le même amas vert GSR, non revérifié.
 * Le gain de 0,81 → 0,13 ms vu avant la borne de LOD était faux (rayons qui rataient). La bonne

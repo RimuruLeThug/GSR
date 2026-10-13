@@ -21,6 +21,7 @@ import net.minecraft.client.util.ScreenshotRecorder;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.text.Text;
 import net.minecraft.util.Util;
+import net.minecraft.util.math.Vec3d;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -98,17 +99,73 @@ public final class GsrClient implements ClientModInitializer {
      */
     private static final String AUTOSHOT = System.getProperty("gsr.autoshot");
     private static final String[] AUTOSHOT_VIEWS = {"normal", "ssr", "gsr"};
+    /**
+     * Rafales de scintillement, après les vues : par configuration, FLICKER_FRAMES captures à un tick
+     * d'intervalle, caméra immobile. « off » (mod coupé) mesure l'animation propre de l'eau vanilla.
+     * Comparer avec : java tools/FlickerDiff.java run/screenshots/<préfixe>_flicker_<config>_*.png
+     */
+    private static final String[] FLICKER_CONFIGS = {"off", "default", "nobricks", "scale1", "gsronly"};
+    private static final int FLICKER_FRAMES = 8;
     private static int autoShotTicks;
 
     private static void autoShot(MinecraftClient client) {
         if (client.world == null || client.player == null) return;
-        // Capture i à 300 + 60·i ticks ; entre deux, 60 ticks pour que l'historique temporel se stabilise.
+        // Vue i à 300 + 60·i ticks ; entre deux, 60 ticks pour que l'historique temporel se stabilise.
         int t = ++autoShotTicks - 300;
-        if (t < 0 || t % 60 != 0 || t / 60 >= AUTOSHOT_VIEWS.length) return;
-        int i = t / 60;
-        ScreenshotRecorder.saveScreenshot(client.runDirectory, AUTOSHOT + "_" + AUTOSHOT_VIEWS[i] + ".png",
+        if (t < 0) return;
+        if (t < 60 * AUTOSHOT_VIEWS.length) {
+            if (t % 60 != 0) return;
+            int i = t / 60;
+            saveShot(client, AUTOSHOT + "_" + AUTOSHOT_VIEWS[i]);
+            CONFIG.debugView = (i + 1) % AUTOSHOT_VIEWS.length;   // vue suivante ; normal après la dernière
+            return;
+        }
+        // Rafales : 60 ticks de stabilisation par configuration, puis une capture par tick.
+        t -= 60 * AUTOSHOT_VIEWS.length;
+        int c = t / (60 + FLICKER_FRAMES), k = t % (60 + FLICKER_FRAMES) - 60;
+        if (c >= FLICKER_CONFIGS.length) {
+            if (k == -60) applyFlickerConfig("default");
+            if (frozenPos != null) client.options.getBobView().setValue(frozenBob);
+            frozenPos = null;
+            return;
+        }
+        freezeCamera(client);
+        if (k == -60) applyFlickerConfig(FLICKER_CONFIGS[c]);
+        if (k >= 0) saveShot(client, AUTOSHOT + "_flicker_" + FLICKER_CONFIGS[c] + "_" + k);
+    }
+
+    private static Vec3d frozenPos;
+    private static float frozenYaw, frozenPitch;
+    private static boolean frozenBob;
+
+    /** Caméra strictement immobile pendant les rafales : un joueur dans l'eau flotte et dérive sinon. */
+    private static void freezeCamera(MinecraftClient client) {
+        var p = client.player;
+        if (frozenPos == null) {
+            frozenPos = p.getPos();
+            frozenYaw = p.getYaw();
+            frozenPitch = p.getPitch();
+            frozenBob = client.options.getBobView().getValue();
+            client.options.getBobView().setValue(false);
+            p.getAbilities().flying = true;
+        }
+        p.refreshPositionAndAngles(frozenPos.x, frozenPos.y, frozenPos.z, frozenYaw, frozenPitch);
+        p.resetPosition();
+        p.prevYaw = frozenYaw;
+        p.prevPitch = frozenPitch;
+        p.setVelocity(0, 0, 0);
+    }
+
+    private static void applyFlickerConfig(String name) {
+        CONFIG.standaloneEnabled = !name.equals("off");
+        CONFIG.brickMask = !name.equals("nobricks");
+        CONFIG.standaloneResolutionScale = name.equals("scale1") ? 1 : 2;
+        CONFIG.debugView = name.equals("gsronly") ? 2 : 0;
+    }
+
+    private static void saveShot(MinecraftClient client, String name) {
+        ScreenshotRecorder.saveScreenshot(client.runDirectory, name + ".png",
                 client.getFramebuffer(), msg -> LOG.info("GSR autoshot : {}", msg.getString()));
-        CONFIG.debugView = (i + 1) % AUTOSHOT_VIEWS.length;   // vue suivante ; normal après la dernière
     }
 
     private static LiteralArgumentBuilder<FabricClientCommandSource> debugView(String name, int mode) {
