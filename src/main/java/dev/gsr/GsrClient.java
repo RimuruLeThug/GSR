@@ -17,6 +17,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.util.ScreenshotRecorder;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.text.Text;
 import net.minecraft.util.Util;
@@ -42,6 +43,7 @@ public final class GsrClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         ClientTickEvents.END_CLIENT_TICK.register(GsrClient::tick);
+        if (AUTOSHOT != null) ClientTickEvents.END_CLIENT_TICK.register(GsrClient::autoShot);
 
         ClientChunkEvents.CHUNK_LOAD.register((world, chunk) -> {
             ensureWorld(world);
@@ -87,6 +89,26 @@ public final class GsrClient implements ClientModInitializer {
 
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(() -> ensureWorld(null)));
         LOG.info("GSR (Gaussian Space Reflections) initialisé");
+    }
+
+    /**
+     * Développement : -Dgsr.autoshot=<préfixe> prend, 15 s après l'entrée dans le monde, une capture par
+     * vue de debug (normal, ssr, gsr) dans run/screenshots/<préfixe>_<vue>.png, sans intervention.
+     * Le joueur réapparaît où il s'est déconnecté : on retrouve la vue d'une session précédente.
+     */
+    private static final String AUTOSHOT = System.getProperty("gsr.autoshot");
+    private static final String[] AUTOSHOT_VIEWS = {"normal", "ssr", "gsr"};
+    private static int autoShotTicks;
+
+    private static void autoShot(MinecraftClient client) {
+        if (client.world == null || client.player == null) return;
+        // Capture i à 300 + 60·i ticks ; entre deux, 60 ticks pour que l'historique temporel se stabilise.
+        int t = ++autoShotTicks - 300;
+        if (t < 0 || t % 60 != 0 || t / 60 >= AUTOSHOT_VIEWS.length) return;
+        int i = t / 60;
+        ScreenshotRecorder.saveScreenshot(client.runDirectory, AUTOSHOT + "_" + AUTOSHOT_VIEWS[i] + ".png",
+                client.getFramebuffer(), msg -> LOG.info("GSR autoshot : {}", msg.getString()));
+        CONFIG.debugView = (i + 1) % AUTOSHOT_VIEWS.length;   // vue suivante ; normal après la dernière
     }
 
     private static LiteralArgumentBuilder<FabricClientCommandSource> debugView(String name, int mode) {

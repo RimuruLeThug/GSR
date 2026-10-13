@@ -29,6 +29,12 @@ tasks.register('coreSelfTest', JavaExec) {
     mainClass = 'dev.gsr.core.CoreSelfTest'
 }
 
+// Développement : ./gradlew runClient -PgsrAutoshot=<préfixe> -> captures automatiques normal/ssr/gsr
+// dans run/screenshots (voir GsrClient#autoShot).
+tasks.named('runClient', JavaExec) {
+    if (project.hasProperty('gsrAutoshot')) systemProperty 'gsr.autoshot', project.property('gsrAutoshot')
+}
+
 processResources {
     inputs.property 'version', project.version
     filesMatching('fabric.mod.json') { expand 'version': project.version }

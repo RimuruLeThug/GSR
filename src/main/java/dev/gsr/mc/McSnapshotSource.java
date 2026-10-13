@@ -90,9 +90,10 @@ public final class McSnapshotSource implements SectionSnapshotSource {
             int id = rawId(i, x, y, z);
             return id < 0 ? GsrLayout.KIND_AIR : mat.kind(id);
         }
-        @Override public int albedo(int x, int y, int z) {
+        @Override public int albedo(int x, int y, int z) { return albedo(x, y, z, GsrLayout.FACE_SIDE); }
+        @Override public int albedo(int x, int y, int z, int faceGroup) {
             int id = rawId(which(x, y, z), x, y, z);
-            return id < 0 ? 0 : mat.albedo(id);
+            return id < 0 ? 0 : mat.albedo(id, faceGroup);
         }
         @Override public int emission(int x, int y, int z) {
             int id = rawId(which(x, y, z), x, y, z);

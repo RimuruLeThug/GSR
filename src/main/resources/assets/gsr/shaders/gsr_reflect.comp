@@ -42,9 +42,11 @@ float ssrTrace(vec3 vp, vec3 rv, ivec2 px, out vec2 hitUV, out float hitDist) {
         if (any(lessThan(s, vec2(0.0))) || any(greaterThanEqual(s, uScreenSize))) return 0.0;  // off-screen
         float rayZ   = mix(vp.z * k0, ve.z * k1, f) / mix(k0, k1, f);
         float sceneZ = gsrLinearViewZ(texelFetch(uDepth, ivec2(s), 0).r);
-        float thickness = max(0.3, -rayZ * 0.03);
         if (rayZ < sceneZ) {
-            if (sceneZ - rayZ > thickness) return 0.0;   // passé DERRIÈRE un objet : info absente de l'écran
+            // Raffinement AVANT le test d'épaisseur : un pas grossier (jusqu'à ~20 px) sur une pente vue
+            // de biais dépasse largement l'épaisseur, ce qui faisait rater au SSR des objets bien visibles
+            // (colline réfléchie -> repli GSR flou). Seul l'écart au point affiné dit si le rayon passe
+            // vraiment derrière une silhouette.
             float lo = prevF, hi = f;
             for (int j = 0; j < SSR_REFINE; j++) {
                 float m = 0.5 * (lo + hi);
@@ -52,6 +54,9 @@ float ssrTrace(vec3 vp, vec3 rv, ivec2 px, out vec2 hitUV, out float hitDist) {
                 float sz = gsrLinearViewZ(texelFetch(uDepth, ivec2(mix(s0, s1, m)), 0).r);
                 if (rz < sz) hi = m; else lo = m;
             }
+            float hz = mix(vp.z * k0, ve.z * k1, hi) / mix(k0, k1, hi);
+            float sz = gsrLinearViewZ(texelFetch(uDepth, ivec2(mix(s0, s1, hi)), 0).r);
+            if (sz - hz > max(0.3, -hz * 0.03)) return 0.0;   // passé DERRIÈRE un objet : info absente de l'écran
             hitUV = mix(s0, s1, hi) / uScreenSize;
             vec3 hp = mix(vp * k0, ve * k1, hi) / mix(k0, k1, hi);
             hitDist = length(hp - vp);

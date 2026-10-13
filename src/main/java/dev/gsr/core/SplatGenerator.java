@@ -39,7 +39,6 @@ public final class SplatGenerator {
                 for (int x = 0; x < N; x++) {
                     int k = grid.kind(x, y, z);
                     if (k == GsrLayout.KIND_AIR) continue;
-                    int albedo = grid.albedo(x, y, z);
                     int em = grid.emission(x, y, z);
                     int c = GsrLayout.cellIndex(x >> 1, y >> 1, z >> 1);
                     for (int d = 0; d < 6; d++) {
@@ -60,7 +59,7 @@ public final class SplatGenerator {
                         px[n] = (x + 0.5f + 0.5f * dir[0]) * vb;
                         py[n] = (y + 0.5f + 0.5f * dir[1]) * vb;
                         pz[n] = (z + 0.5f + 0.5f * dir[2]) * vb;
-                        alb[n] = albedo;
+                        alb[n] = grid.albedo(x, y, z, GsrLayout.faceGroup(d));
                         dat[n] = GsrLayout.packSplatData(octs[d], lt, em, key.level());
                         cell[n] = c;
                         prio[n] = (lt >> 4) + (nk == GsrLayout.KIND_AIR ? 16 : 0); // 0..31

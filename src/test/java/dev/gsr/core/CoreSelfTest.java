@@ -156,6 +156,38 @@ public final class CoreSelfTest {
             check(high == 1L << 63, "brique 63 -> bit 63 (moitié haute, mask.y)");
         }
 
+        System.out.println("== Albédo par groupe de faces (bloc d'herbe : vert dessus, terre ailleurs)");
+        {
+            final int GREEN = 0xFF5FA032, DIRT = 0xFF866043;
+            VoxelSource grass = new VoxelSource() {
+                public int kind(int x, int y, int z) { return y < 8 ? GsrLayout.KIND_OPAQUE : GsrLayout.KIND_AIR; }
+                public int albedo(int x, int y, int z) { return DIRT; }
+                public int albedo(int x, int y, int z, int f) { return f == GsrLayout.FACE_UP ? GREEN : DIRT; }
+                public int light(int x, int y, int z) { return 0xF0; }
+                public int emission(int x, int y, int z) { return 0; }
+            };
+            // L0 : un bloc d'herbe isolé dans la grille -> chaque face a la couleur de son groupe
+            VoxelSource one = new VoxelSource() {
+                public int kind(int x, int y, int z) { return x == 4 && y == 4 && z == 4 ? GsrLayout.KIND_OPAQUE : GsrLayout.KIND_AIR; }
+                public int albedo(int x, int y, int z) { return DIRT; }
+                public int albedo(int x, int y, int z, int f) { return grass.albedo(x, y, z, f); }
+                public int light(int x, int y, int z) { return 0xF0; }
+                public int emission(int x, int y, int z) { return 0; }
+            };
+            PageData pd = SplatGenerator.generate(new PageKey(0, 0, 0, 0), 1, VoxelGrid.fromSource(one), new GsrConfig());
+            boolean ok = pd.splatCount() == 6;
+            for (int i = 0; i < pd.splatCount(); i++) {
+                int rgb = pd.splats().getInt(i * 32 + 16) & 0xFFFFFF;
+                float[] n = GsrLayout.octDecode(pd.splats().getInt(i * 32 + 20) & 0xFFFF);
+                ok &= rgb == ((n[1] > 0.5f ? GREEN : DIRT) & 0xFFFFFF);
+            }
+            check(ok, "L0 : face du dessus verte, côtés et dessous couleur terre (" + pd.splatCount() + " splats)");
+            // Mip 1 (L1) : le résumé conserve la distinction dessus / côtés
+            SectionSummary s = SectionSummary.build(grass);
+            check(s.albedo(1, 0, 3, 0, GsrLayout.FACE_UP) == GREEN && s.albedo(1, 0, 3, 0, GsrLayout.FACE_SIDE) == DIRT,
+                    "mip1 : albédo dessus = herbe, côtés = terre");
+        }
+
         System.out.println("== Résumés de section");
         {
             World w = new World();

@@ -101,7 +101,28 @@ vec3 gsrSkyRadiance(vec3 dir) {
     return sky;
 }
 
-// Éclairage d'un splat : dynamique (soleil / heure du jour) SANS reconstruire les splats.
+// Éclairage d'un splat : dynamique (heure du jour) SANS reconstruire les splats.
+// Par défaut, imitation de l'éclairage vanilla (lightmap + ombrage fixe par face, calcul en sRGB) :
+// le reflet GSR doit se raccorder sans couture au SSR, qui reflète l'image vanilla. L'ancien modèle
+// « physique » (soleil directionnel ×2,2) rendait les collines deux fois trop claires (vu en jeu).
+// Un shaderpack peut définir GSR_SHADE_PHYSICAL pour éclairer avec son propre soleil.
+#ifndef GSR_SHADE_PHYSICAL
+float gsrVanillaBrightness(float level) { float f = level / 15.0; return f / (4.0 - 3.0 * f); }
+
+vec3 gsrShadeSplat(vec3 albedoSrgb, vec3 n, uint data) {
+    float sky = float((data >> 20u) & 0xFu);
+    float blk = float((data >> 16u) & 0xFu);
+    float em  = float((data >> 24u) & 0xFu) / 15.0;
+    vec3  l   = vec3(gsrVanillaBrightness(sky) * gsrFrame.sunDir.w) + gsrVanillaBrightness(blk) * gsrFrame.blockLight.rgb;
+    l = clamp(l, 0.0, 1.0);
+    l = mix(l, 1.0 - pow(1.0 - l, vec3(4.0)), 0.5);           // option « Luminosité » par défaut (50 %)
+    l = max(l, vec3(em));                                      // blocs lumineux : pleinement éclairés
+    // Ombrage fixe vanilla : dessus 1,0, dessous 0,5, nord/sud 0,8, est/ouest 0,6
+    vec3 n2 = n * n;
+    float shade = 0.6 * n2.x + 0.8 * n2.z + (n.y > 0.0 ? 1.0 : 0.5) * n2.y;
+    return pow(albedoSrgb * l * shade, vec3(2.2));
+}
+#else
 vec3 gsrShadeSplat(vec3 albedoSrgb, vec3 n, uint data) {
     vec3  albedo = pow(albedoSrgb, vec3(2.2));
     float sky = float((data >> 20u) & 0xFu) / 15.0;
@@ -113,6 +134,7 @@ vec3 gsrShadeSplat(vec3 albedoSrgb, vec3 n, uint data) {
     vec3 bl   = gsrFrame.blockLight.rgb * (blk * blk);
     return albedo * (amb * 0.6 + sun + bl) + albedo * em * gsrFrame.blockLight.w;
 }
+#endif
 
 // ------------------------------------------------------------------------------- traversée
 

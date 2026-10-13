@@ -43,6 +43,12 @@ public final class GsrLayout {
             {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}
     };
 
+    /** Groupes de faces pour l'albédo : un bloc d'herbe est vert dessus, terre sur les côtés et dessous. */
+    public static final int FACE_SIDE = 0, FACE_UP = 1, FACE_DOWN = 2, FACE_GROUPS = 3;
+
+    /** Index de direction (ordre de {@link #DIRS}) -> groupe de faces. */
+    public static int faceGroup(int dir) { return dir == 3 ? FACE_UP : dir == 2 ? FACE_DOWN : FACE_SIDE; }
+
     public static int cellIndex(int cx, int cy, int cz) {
         return cx + CELLS_PER_AXIS * (cy + CELLS_PER_AXIS * cz);
     }

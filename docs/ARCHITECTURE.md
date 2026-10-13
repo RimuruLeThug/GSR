@@ -185,7 +185,7 @@ linéaire, écriture `rgba8` dans le framebuffer principal **avant** la main et 
 
 ## 6. État et feuille de route
 
-**Vérifié** : tout `dev.gsr.core` compile et passe 30 vérifications (`CoreSelfTest`, dont les stats, la file de captures et le masque de briques) : format std430, clé de
+**Vérifié** : tout `dev.gsr.core` compile et passe 33 vérifications (`CoreSelfTest`, dont les stats, la file de captures et le masque de briques) : format std430, clé de
 section signée, budget et tri par cellule, résumés, et — via `CpuReferenceTracer`, miroir ligne à ligne
 de `gsrTrace()` sur les mêmes octets — impacts au sol (L0), sur un pilier hors fenêtre L0 (trouvé en
 L1), dans l'eau translucide, en cône rugueux, après destruction de blocs et après recentrage toroïdal.
@@ -250,9 +250,26 @@ Prochaines étapes, par ordre de rentabilité :
    qu'échanger la lecture de `cells[]` contre une autre lecture de même coût, sans réduire le nombre de
    pas. La méta, elle, est déjà lue à chaque pas, et une brique vide se franchit en un pas au lieu de
    2 à 4. Test CPU : rayon rasant à 4 blocs du sol, 6 pas sur 20 blocs au lieu de ≥ 10.
-   Vérifié en jeu : les shaders compilent sur AMD et le monde charge sans exception.
-   **Temps GPU et rendu à l'écran : pas encore mesurés**.
-3. Albédo depuis la **moyenne réelle des sprites** de l'atlas (au lieu de `MapColor`), teinte de biome.
+   **Piège corrigé** : un saut de brique vide ne doit pas franchir la distance où l'empreinte du cône
+   dépasse 2^L (le niveau L+1 peut avoir du contenu dans la zone sautée). Sans cette borne, des rayons
+   rugueux rataient le relief, ce qui faisait scintiller l'eau. Comparaison CPU sur 4000 rayons aléatoires, avec et sans
+   masque : 0 écart (test permanent dans `CoreSelfTest`).
+   Mesuré en jeu (`/gsr bricks off|on`, même endroit face à l'eau) : reflet **0,67 → 0,51 ms**
+   (−24 %), total 1,20 → 1,12 ms.
+3. ~~Albédo depuis les **textures réelles**~~ (fait, 2026-10-13, sans teinte de biome). Une couleur par
+   **groupe de faces** (côtés / dessus / dessous) : `BlockMaterialTable` superpose les quads du modèle
+   cuit, teinte par défaut incluse, et relit les PNG via le gestionnaire de ressources (aucun access
+   widener) : 702 textures en ~100 ms au chargement du monde. Les résumés de section moyennent chaque groupe
+   séparément. Éclairage des splats aligné sur vanilla (lightmap, ombrage fixe par face, calcul en
+   sRGB) ; l'ancien modèle « soleil ×2,2 » reste disponible via `GSR_SHADE_PHYSICAL` pour les packs.
+   **Pourquoi** : en jeu, le reflet GSR d'une colline (herbe = vert `MapColor` sur toutes les faces, ×2
+   trop clair) formait un amas vert vif. Il ne se raccordait pas au SSR, d'où une bande verte qui
+   suivait le bord de l'écran, là où le SSR passe la main. Vérifié par captures `/gsr debug gsr` avant/après.
+   Reste : teinte de biome par position (marécages, jungles…).
+   Outils de diagnostic : `/gsr debug normal|ssr|gsr`, `/gsr bricks on|off`, et
+   `gradlew runClient -PgsrAutoshot=<préfixe>` (3 captures automatiques, une par vue, dans `run/screenshots`).
+   Corrigés au passage : SSR, test d'épaisseur fait **après** le raffinement binaire (un pas grossier
+   rejetait à tort des collines visibles) ; normale reconstruite, plus de voisin hors écran au bord.
 4. Mode autonome : le masque par profondeur (passe 0) ne distingue pas l'eau du verre teinté ni de la
    glace ; un vrai ID matériau demanderait un mixin sur le shader de terrain translucide, ou de le
    laisser aux shaderpacks.

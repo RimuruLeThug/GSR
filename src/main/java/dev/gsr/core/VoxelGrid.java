@@ -9,14 +9,14 @@ public final class VoxelGrid {
     private static final int S = N + 2;
 
     final byte[] kind = new byte[S * S * S];
-    final int[] albedo = new int[S * S * S];
+    final int[][] albedo = new int[GsrLayout.FACE_GROUPS][S * S * S];   // [groupe de faces][voxel]
     final byte[] light = new byte[S * S * S];
     final byte[] emission = new byte[S * S * S];
 
     private static int idx(int x, int y, int z) { return (x + 1) + S * ((y + 1) + S * (z + 1)); }
 
     public int kind(int x, int y, int z) { return kind[idx(x, y, z)]; }
-    public int albedo(int x, int y, int z) { return albedo[idx(x, y, z)]; }
+    public int albedo(int x, int y, int z, int faceGroup) { return albedo[faceGroup][idx(x, y, z)]; }
     public int light(int x, int y, int z) { return light[idx(x, y, z)] & 0xFF; }
     public int emission(int x, int y, int z) { return emission[idx(x, y, z)]; }
 
@@ -40,7 +40,7 @@ public final class VoxelGrid {
                     g.kind[i] = (byte) k;
                     g.light[i] = (byte) src.light(x, y, z);
                     if (k != GsrLayout.KIND_AIR) {
-                        g.albedo[i] = src.albedo(x, y, z);
+                        for (int f = 0; f < GsrLayout.FACE_GROUPS; f++) g.albedo[f][i] = src.albedo(x, y, z, f);
                         g.emission[i] = (byte) src.emission(x, y, z);
                     }
                 }
@@ -68,7 +68,7 @@ public final class VoxelGrid {
                     if (s == null) { g.kind[i] = GsrLayout.KIND_AIR; g.light[i] = 0; continue; }
                     int lx = Math.floorMod(bx, 16) >> L, ly = Math.floorMod(by, 16) >> L, lz = Math.floorMod(bz, 16) >> L;
                     g.kind[i] = (byte) s.kind(L, lx, ly, lz);
-                    g.albedo[i] = s.albedo(L, lx, ly, lz);
+                    for (int f = 0; f < GsrLayout.FACE_GROUPS; f++) g.albedo[f][i] = s.albedo(L, lx, ly, lz, f);
                     g.light[i] = (byte) s.light(L, lx, ly, lz);
                     g.emission[i] = (byte) s.emission(L, lx, ly, lz);
                 }

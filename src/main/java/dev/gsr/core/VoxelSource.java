@@ -13,6 +13,8 @@ public interface VoxelSource {
     int kind(int x, int y, int z);
     /** Albédo approché 0xAARRGGBB (A = opacité). */
     int albedo(int x, int y, int z);
+    /** Albédo d'un groupe de faces ({@link GsrLayout#FACE_SIDE}, UP, DOWN). Par défaut : le même partout. */
+    default int albedo(int x, int y, int z, int faceGroup) { return albedo(x, y, z); }
     /** Lumière (sky << 4 | block), 0..255. */
     int light(int x, int y, int z);
     /** Émission (luminance du bloc), 0..15. */
