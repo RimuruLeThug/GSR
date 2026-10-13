@@ -50,7 +50,8 @@ public final class GsrRenderer {
     /**
      * Development (-Dgsr.benchRepeat=N, gradle -PgsrBench=N): the reflection pass is dispatched N times per
      * frame and its time divided by N. Keeps the GPU at its working clock (with vsync it idles and
-     * down-clocks, making sub-millisecond measurements noisy).
+     * down-clocks, making sub-millisecond measurements noisy). The repeats are separated by a barrier,
+     * as the single pass is in a real frame.
      */
     private static final int BENCH_REPEAT = Math.max(1, Integer.getInteger("gsr.benchRepeat", 1));
     private GsrGpuTimer timer;
@@ -215,7 +216,11 @@ public final class GsrRenderer {
             glBindImageTexture(0, targets.reflection, 0, false, 0, GL_WRITE_ONLY, GL_RGBA16F);
             glBindImageTexture(1, targets.representative, 0, false, 0, GL_WRITE_ONLY, GL_R8UI);
             timer.begin(T_REFLECT);
-            for (int r = 0; r < BENCH_REPEAT; r++) glDispatchCompute(lgx, lgy, 1);
+            for (int r = 0; r < BENCH_REPEAT; r++) {
+                glDispatchCompute(lgx, lgy, 1);
+                // Without a barrier the driver overlaps the repeats, which hid ~1/3 of the real cost of one pass.
+                if (BENCH_REPEAT > 1) glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+            }
             timer.end(T_REFLECT);
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 

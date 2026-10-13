@@ -426,6 +426,26 @@ Resolution scales 3 and 4 added (representative pixel index ≤ 15 on the R8UI t
 full 1.448 ms, half 0.391 ms, third 0.193 ms, quarter 0.139 ms. Quarter resolution checked on a still image only
 (no visible blocks along the shores); stability in motion not measured.
 
+**Bench corrected (2026-10-14, night session)**: the N repeats of the bench were dispatched back to back with no
+barrier, and the AMD driver overlapped them, so the figures above measure *throughput*, not the time of the
+single pass of a real frame (which is followed by a barrier). The repeats are now separated by an image barrier.
+Same spot, bench ×16, reflection pass:
+
+| | full | half (default) | third | quarter | half, SSR only | half, GSR only |
+|---|---|---|---|---|---|---|
+| old bench (overlapped) | 1.448 | 0.391 | 0.193 | 0.139 | 0.196 | 0.303 |
+| corrected bench | 1.699 | 0.598 | 0.366 | 0.341 | 0.254 | 0.546 |
+
+On this GPU, below half resolution the pass is bound by the latency of the longest rays, not by the
+texel count (quarter ≈ third). On a smaller GPU the throughput (old figures) is the better guide.
+
+**Tried without gain: compaction of the GSR rays** (patch kept outside the repository). Pass 1a = SSR only, appending
+the texels left to GSR to an SSBO list (one atomic per 8×8 group); a 1×1×1 pass writes the arguments of
+`glDispatchComputeIndirect`; pass 1b traces one listed ray per invocation (local size 64). Images identical to the
+reference. Corrected bench: half resolution 0.598 → **0.715 ms**, SSR only 0.237 → 0.286 ms, full resolution
+1.699 → **1.913 ms**. The two extra barriers and the args pass cost ~0.05 ms, and the compacted rays are not traced
+faster: the idle lanes of SSR texels were already hidden by the other waves in flight.
+
 **Settings screen and keys (2026-10-14, verified in game with `-PgsrUiTest=<prefix>`, which scripts the screens and keys
 and takes a screenshot of each step)**. No mixin: Fabric `ScreenEvents.AFTER_INIT` appends a
 "GSR Reflections..." entry to the `OptionListWidget` of `VideoOptionsScreen` (with Sodium, which replaces that
