@@ -243,6 +243,29 @@ représentant dans la passe reflet et le relire, au lieu de le recalculer.
 
 **Non vérifié** : mode « Fabuleux », Sodium, Iris, pilotes NVIDIA/Intel, nuit/pluie/Nether.
 
+**Problèmes ouverts (2026-10-13, fin de session, commit `2265201`)** — à vérifier en premier :
+* **Scintillement de l'eau** signalé par l'utilisateur, absent avant le masque de briques et la
+  demi-résolution. Encore présent après la borne de LOD du masque (`7ecff59`). **Pas revérifié depuis
+  les corrections de couleur et du SSR** (`2265201`) : une alternance SSR/GSR de couleurs très
+  différentes d'une frame à l'autre était une cause probable. Diagnostic prévu :
+  `/gsr bricks off`, puis `/gsr scale 1`, pour isoler la cause. Une mesure objective est possible :
+  plusieurs captures caméra immobile, puis différence des pixels de l'eau.
+* **« Nuage » de pixels verts au-dessus de l'eau** quand la caméra est presque au ras de l'eau (capture
+  utilisateur 17:35). Probablement le même amas vert GSR, non revérifié.
+* Le gain de 0,81 → 0,13 ms vu avant la borne de LOD était faux (rayons qui rataient). La bonne
+  mesure est 0,51 ms.
+
+**Étape en cours : teinte de biome** (pas commencée dans le code). Plan retenu :
+* La composition des quads est **linéaire en la teinte** : par face, couleur = A + B ⊙ teinte (A =
+  partie non teintée, B = coefficient des quads teintés). `BlockMaterialTable` stocke A et B par groupe
+  de faces, plus un type de teinte : aucune, herbe, feuillage ou eau. Le type se déduit en comparant
+  `BlockColors.getColor(state, null, null, i)` aux couleurs par défaut de `GrassColors` et
+  `FoliageColors`. Les teintes constantes (bouleau, épicéa, redstone) restent figées. Noms d'API à
+  vérifier dans le jar avant usage.
+* `McSnapshotSource` échantillonne `BiomeColors.getGrass/Foliage/WaterColor` sur le thread client.
+  Un échantillon par colonne 4×4 (résolution des biomes) sur −4..19, soit 6×6×3 lectures par section
+  et non 18×18. Le snapshot calcule ensuite A + B ⊙ teinte.
+
 Prochaines étapes, par ordre de rentabilité :
 1. ~~Reflet en **demi-résolution** + upsampling guidé par la profondeur~~ (fait : 3,04 → 1,24 ms).
 2. ~~**Masque d'occupation par page**~~ (fait, 2026-10-13). Choix : 64 bits par **brique** de 2³
