@@ -18,19 +18,26 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
+import net.fabricmc.fabric.api.resource.ResourceManagerHelper;
+import net.fabricmc.fabric.api.resource.ResourceReloadListenerKeys;
+import net.fabricmc.fabric.api.resource.SimpleSynchronousResourceReloadListener;
 import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.color.world.BiomeColors;
 import net.minecraft.client.util.ScreenshotRecorder;
 import net.minecraft.client.world.ClientWorld;
+import net.minecraft.resource.ResourceManager;
+import net.minecraft.resource.ResourceType;
 import net.minecraft.text.Text;
+import net.minecraft.util.Identifier;
 import net.minecraft.util.Util;
 import net.minecraft.util.math.Vec3d;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -45,6 +52,7 @@ public final class GsrClient implements ClientModInitializer {
     private static final GsrRenderer RENDERER = new GsrRenderer();
     private static BlockMaterialTable materials;
     private static GaussianChunkManager manager;
+    private static McSnapshotSource source;
     private static ClientWorld currentWorld;
 
     @Override
@@ -101,6 +109,13 @@ public final class GsrClient implements ClientModInitializer {
                         .then(ClientCommandManager.literal("bricks")
                                 .then(brickToggle("on", true)).then(brickToggle("off", false)))));
 
+        // Après les modèles : BlockMaterialTable lit les quads cuits et l'atlas.
+        ResourceManagerHelper.get(ResourceType.CLIENT_RESOURCES).registerReloadListener(new SimpleSynchronousResourceReloadListener() {
+            @Override public Identifier getFabricId() { return Identifier.of("gsr", "materials"); }
+            @Override public Collection<Identifier> getFabricDependencies() { return List.of(ResourceReloadListenerKeys.MODELS); }
+            @Override public void reload(ResourceManager resourceManager) { onResourcesReloaded(); }
+        });
+
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(() -> ensureWorld(null)));
         LOG.info("GSR (Gaussian Space Reflections) initialisé");
     }
@@ -124,7 +139,7 @@ public final class GsrClient implements ClientModInitializer {
     /**
      * -Dgsr.autoshotCmds="locate biome minecraft:swamp;time set noon" : commandes envoyées 5 s après
      * l'entrée dans le monde (téléportation, heure, météo), avant les captures. Le résultat apparaît
-     * dans le log ([CHAT]). Ce qui suit un « | » est envoyé 13 s avant la première capture (ex. gsr stats : le chat a disparu).
+     * dans le log ([CHAT]). Ce qui suit un « | » est envoyé 13 s avant la première capture (ex. gsr stats : le chat a disparu). « f3t » recharge les ressources.
      */
     private static final String AUTOSHOT_CMDS = System.getProperty("gsr.autoshotCmds");
 
@@ -134,8 +149,10 @@ public final class GsrClient implements ClientModInitializer {
         if (AUTOSHOT_CMDS != null && (autoShotTicks == 100 || autoShotTicks == 640)) {
             String[] parts = AUTOSHOT_CMDS.split("\\|", 2);
             String part = autoShotTicks == 100 ? parts[0] : parts.length > 1 ? parts[1] : "";
-            for (String cmd : part.split(";"))
-                if (!cmd.isBlank()) client.player.networkHandler.sendChatCommand(cmd.strip());
+            for (String cmd : part.split(";")) {
+                if (cmd.strip().equals("f3t")) client.reloadResources();   // équivalent de F3+T
+                else if (!cmd.isBlank()) client.player.networkHandler.sendChatCommand(cmd.strip());
+            }
         }
         // Vue i à 300 + 60·i ticks ; entre deux, 60 ticks pour que l'historique temporel se stabilise.
         int t = ++autoShotTicks - (AUTOSHOT_CMDS != null ? 900 : 300);   // téléportation : laisser générer
@@ -260,7 +277,31 @@ public final class GsrClient implements ClientModInitializer {
         RENDERER.resetHistory();
         if (world == null) return;
         if (materials == null) materials = BlockMaterialTable.build();
-        manager = new GaussianChunkManager(CONFIG, new McSnapshotSource(world, materials));
+        source = new McSnapshotSource(world, materials);
+        manager = new GaussianChunkManager(CONFIG, source);
+    }
+
+    /**
+     * Pack de ressources changé (F3+T, menu) : couleurs des modèles et teintes changent. On reconstruit la
+     * table puis on recapture les sections chargées ; les pages se mettent à jour au fil des captures.
+     */
+    private static void onResourcesReloaded() {
+        if (materials == null) return; // première construction : paresseuse, à l'entrée dans un monde
+        materials = BlockMaterialTable.build();
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (manager == null || client.player == null) return;
+        source.setMaterials(materials);
+        int pcx = client.player.getBlockX() >> 4, pcz = client.player.getBlockZ() >> 4;
+        int r = client.options.getClampedViewDistance() + 1;
+        int minSy = currentWorld.getBottomSectionCoord(), maxSy = currentWorld.getTopSectionCoord() - 1;
+        int columns = 0;
+        for (int cx = pcx - r; cx <= pcx + r; cx++)
+            for (int cz = pcz - r; cz <= pcz + r; cz++)
+                if (currentWorld.getChunkManager().isChunkLoaded(cx, cz)) {
+                    manager.onChunkLoaded(cx, cz, minSy, maxSy);
+                    columns++;
+                }
+        LOG.info("GSR : ressources rechargées, {} colonnes recapturées", columns);
     }
 
     // ---- appelés par ClientWorldMixin (thread client) ----

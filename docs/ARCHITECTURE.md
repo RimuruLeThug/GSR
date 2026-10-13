@@ -303,8 +303,11 @@ Historique du diagnostic :
   d'herbe. Au marécage (775, 2041) : herbe #677039, eau #617B64 → dessus d'herbe #3B4121 (plaine
   #476D3E) ; la vue `/gsr debug gsr` y montre un reflet olive sombre.
 * Limites : canne à sucre (teinte `-1` sans monde) classée non teintée ; une seule hauteur par
-  section (biomes 3D des grottes approchés) ; la table n'est pas reconstruite après un changement de
-  pack de ressources (reconstruite au prochain lancement).
+  section (biomes 3D des grottes approchés).
+* Changement de pack de ressources (F3+T, menu) : un `SimpleSynchronousResourceReloadListener`
+  (après `MODELS`) reconstruit la table, la passe à `McSnapshotSource` et recapture les colonnes
+  chargées. Vérifié (autoshot `f3t`) : table reconstruite en 60 ms, 609 colonnes recapturées, files
+  vides et reflets intacts ensuite, aucune exception.
 
 **Configuration (faite)** : `config/gsr.json` lu au démarrage par `GsrConfigFile` (Gson), réécrit avec
 les champs manquants et les valeurs bornées par `GsrConfig#validate()` ; un fichier illisible est

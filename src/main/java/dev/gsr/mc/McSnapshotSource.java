@@ -30,13 +30,16 @@ import net.minecraft.world.chunk.WorldChunk;
  */
 public final class McSnapshotSource implements SectionSnapshotSource {
     private final ClientWorld world;
-    private final BlockMaterialTable materials;
+    private BlockMaterialTable materials; // lue et remplacée sur le thread client uniquement (capture)
     private final BlockPos.Mutable cursor = new BlockPos.Mutable();
 
     public McSnapshotSource(ClientWorld world, BlockMaterialTable materials) {
         this.world = world;
         this.materials = materials;
     }
+
+    /** Pack de ressources changé : les captures suivantes utilisent la nouvelle table. */
+    public void setMaterials(BlockMaterialTable materials) { this.materials = materials; }
 
     // ordre : centre, puis GsrLayout.DIRS (-X +X -Y +Y -Z +Z)
     private static final int[][] OFFS = {{0, 0, 0}, {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}};
