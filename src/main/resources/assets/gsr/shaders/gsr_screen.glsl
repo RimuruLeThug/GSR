@@ -44,8 +44,13 @@ vec3 gsrViewNormalFromDepth(sampler2D depthTex, ivec2 px, vec3 vp) {
     vec3 r = gsrViewPos((vec2(px + ivec2( 1, 0)) + 0.5) / uScreenSize, texelFetch(depthTex, clamp(px + ivec2( 1, 0), ivec2(0), mx), 0).r);
     vec3 d = gsrViewPos((vec2(px + ivec2(0, -1)) + 0.5) / uScreenSize, texelFetch(depthTex, clamp(px + ivec2(0, -1), ivec2(0), mx), 0).r);
     vec3 u = gsrViewPos((vec2(px + ivec2(0,  1)) + 0.5) / uScreenSize, texelFetch(depthTex, clamp(px + ivec2(0,  1), ivec2(0), mx), 0).r);
-    vec3 dx = abs(l.z - vp.z) < abs(r.z - vp.z) ? vp - l : r - vp;
-    vec3 dy = abs(d.z - vp.z) < abs(u.z - vp.z) ? vp - d : u - vp;
+    // Au bord de l'écran, le voisin hors écran porte la profondeur du pixel lui-même (clamp) : il serait
+    // toujours « le plus proche » et donnerait une pente fausse (rayon vers le fond -> reflet vert au
+    // bord). On prend alors l'autre voisin.
+    bool useL = px.x >= mx.x || (px.x > 0 && abs(l.z - vp.z) < abs(r.z - vp.z));
+    bool useD = px.y >= mx.y || (px.y > 0 && abs(d.z - vp.z) < abs(u.z - vp.z));
+    vec3 dx = useL ? vp - l : r - vp;
+    vec3 dy = useD ? vp - d : u - vp;
     return normalize(cross(dx, dy));
 }
 
