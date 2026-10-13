@@ -161,6 +161,7 @@ public final class GsrClient implements ClientModInitializer {
     private static void autoShot(MinecraftClient client) {
         if (client.world == null || client.player == null) return;
         client.options.pauseOnLostFocus = false;   // fenêtre en arrière-plan : pas de menu pause (non sauvegardé)
+        if (client.mouse.isCursorLocked()) client.mouse.unlockCursor();   // la souris de l'utilisateur ne tourne plus la caméra
         if (AUTOSHOT_CMDS != null && (autoShotTicks == 100 || autoShotTicks == 640)) {
             String[] parts = AUTOSHOT_CMDS.split("\\|", 2);
             String part = autoShotTicks == 100 ? parts[0] : parts.length > 1 ? parts[1] : "";
@@ -171,9 +172,9 @@ public final class GsrClient implements ClientModInitializer {
         }
         // Vue i à 300 + 60·i ticks ; entre deux, 60 ticks pour que l'historique temporel se stabilise.
         int t = ++autoShotTicks - (AUTOSHOT_CMDS != null ? 900 : 300);   // téléportation : laisser générer
-        // Caméra figée dès 10 s avant les vues (après les commandes tardives) : la souris ou le clavier de
+        // Caméra figée dès 0,5 s après les commandes tardives (téléportation) : la souris ou le clavier de
         // l'utilisateur, fenêtre au premier plan, la faisaient dériver entre deux exécutions à comparer.
-        if (t >= -200 && t < 60 * AUTOSHOT_VIEWS.length) freezeCamera(client, 0);
+        if (t >= -250 && t < 60 * AUTOSHOT_VIEWS.length) freezeCamera(client, 0);
         if (t < 0) return;
         if (client.currentScreen != null) client.setScreen(null);   // chat ou menu ouvert : masquerait l'eau
         if (t < 60 * AUTOSHOT_VIEWS.length) {

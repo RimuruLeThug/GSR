@@ -133,7 +133,7 @@ pendant la frame (redimensionnement), le reflet est sauté plutôt que faux.
 2. Direction : `reflect()` si rugosité < 0,03, sinon microfacette **GGX VNDF** (Heitz 2018) tirée avec
    IGN + séquence R2 décalée par frame.
 3. **SSR** : marche en espace écran à z interpolé en perspective + raffinement binaire. Confiance = 0 si
-   le rayon sort de l'écran **ou passe derrière un objet** (épaisseur dépassée), fondu près des bords.
+   le rayon sort de l'écran **ou passe derrière un objet** (épaisseur dépassée), fondu près des bords (sur les 2 % les plus proches, `smoothstep(0,96 ; 1)` ; 7,5 % avant le 2026-10-13, reflets flous au bord).
 4. **Repli GSR** si confiance < 1 : `gsrTrace()` = cône-marche dans la clipmap. À chaque pas :
    * niveau = le plus fin dont le voxel (2^L) ≥ empreinte du cône **et** dont la fenêtre contient le
      point (`coneTan` = f(rugosité) : un reflet flou utilise d'office des splats plus gros → moins de pas) ;
@@ -323,6 +323,12 @@ l'utilisateur après le correctif ci-dessus) :
   (`gsrTuft`, miroir `CpuReferenceTracer#tuft`, 3 tests). Vérifié en A/B à la même position
   (`tp @s 130.13 62.68 113.65 -119.4 15.3` dans « GSR Repro ») : cubes avant, silhouettes de touffes après.
   L'autoshot fige maintenant la caméra pendant les vues (la souris de l'utilisateur la déplaçait).
+* *Reflets flous près du bord de l'écran.* Le SSR passait la main au GSR (une couleur par face, flou) dès
+  7,5 % du bord (`smoothstep(0,85 ; 1)` sur la position d'impact), soit ~190 px à 2560 de large. Bande
+  réduite à 2 % (0,96). A/B à la même position : la touffe reflétée au bord droit montre ses brins au lieu
+  d'un voile ; pas de couture visible, ni en rotation (vidéo 24 frames à 0,5°/frame). Les reflets restent
+  GSR, donc flous, là où le SSR n'a pas l'information (rayon caché par un premier plan, caméra au ras de
+  l'eau) : c'est le rôle du repli. L'autoshot libère le curseur (la souris ne tourne plus la caméra).
 * Remarqué, non corrigé : la matrice de projection de Minecraft inclut le balancement de la vue en marchant,
   l'œil n'est donc pas exactement à l'origine de l'espace vue alors que les shaders prennent `normalize(P)`
   comme direction de vue (erreur ~1° près de la caméra). L'utilisateur ne voit pas de défaut en avançant.
