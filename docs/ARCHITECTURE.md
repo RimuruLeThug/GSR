@@ -185,6 +185,8 @@ L1), dans l'eau translucide, en cône rugueux, après destruction de blocs et ap
 * rendu (captures d'écran, caméra immobile) : l'eau reflète le relief et le soleil, l'herbe et les
   arbres ne sont plus réfléchissants, main et HUD intacts.
 
+* reflet du soleil validé par l'utilisateur : disque `pow(sd, 3000) × 20`, compression logarithmique
+  au-delà d'une luminance de 8 (`gsr_composite.comp`) ;
 * stabilité en mouvement : aucun scintillement constaté par l'utilisateur (en marchant et en tournant
   la caméra au bord de l'eau) ;
 * `/gsr stats` (commande client) : pages valides / non vides / splats par niveau, files, temps GPU
