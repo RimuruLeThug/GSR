@@ -243,7 +243,13 @@ représentant dans la passe reflet et le relire, au lieu de le recalculer.
 
 **Non vérifié** : mode « Fabuleux », Sodium, Iris, pilotes NVIDIA/Intel, nuit/pluie/Nether.
 
-**Problèmes ouverts (2026-10-13, fin de session, commit `2265201`)** — à vérifier en premier :
+**Problèmes résolus (vérifiés par l'utilisateur le 2026-10-13, commit `c30a21b`)** : plus de
+scintillement de l'eau en marchant et en tournant la caméra, plus de nuage vert au ras de l'eau. Les
+corrections de couleur et du SSR (`2265201`) suffisaient. **Reste, mineur** : une légère nuance marron
+dans les reflets de l'eau au bord de l'écran, probablement au raccord SSR → GSR (terre des faces latérales
+dans le GSR). Pas prioritaire ; la teinte de biome peut la réduire.
+
+Historique du diagnostic :
 * **Scintillement de l'eau** signalé par l'utilisateur, absent avant le masque de briques et la
   demi-résolution. Encore présent après la borne de LOD du masque (`7ecff59`). **Pas revérifié depuis
   les corrections de couleur et du SSR** (`2265201`) : une alternance SSR/GSR de couleurs très
