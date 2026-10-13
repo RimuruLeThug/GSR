@@ -1,5 +1,6 @@
 package dev.gsr;
 
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import dev.gsr.compat.IrisCompat;
 import dev.gsr.core.GaussianChunkManager;
 import dev.gsr.core.GsrConfig;
@@ -55,7 +56,7 @@ public final class GsrClient implements ClientModInitializer {
         });
         // Avant la couche translucide (vérifié dans WorldRenderer#render 1.21.1 : le rendu debug la précède).
         WorldRenderEvents.BEFORE_DEBUG_RENDER.register(ctx -> {
-            if (standaloneActive()) RENDERER.captureOpaqueDepth(ctx);
+            if (standaloneActive()) RENDERER.captureOpaqueDepth(ctx, CONFIG);
         });
         WorldRenderEvents.LAST.register(ctx -> {
             if (standaloneActive()) RENDERER.renderStandalone(ctx, CONFIG);
@@ -63,10 +64,18 @@ public final class GsrClient implements ClientModInitializer {
         WorldRenderEvents.END.register(RENDERER::endFrame);
 
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> dispatcher.register(
-                ClientCommandManager.literal("gsr").then(ClientCommandManager.literal("stats").executes(c -> {
-                    for (String line : statsLines()) c.getSource().sendFeedback(Text.literal(line));
-                    return 1;
-                }))));
+                ClientCommandManager.literal("gsr")
+                        .then(ClientCommandManager.literal("stats").executes(c -> {
+                            for (String line : statsLines()) c.getSource().sendFeedback(Text.literal(line));
+                            return 1;
+                        }))
+                        // /gsr scale 1|2 : résolution des passes reflet + temporel (mesures avant/après)
+                        .then(ClientCommandManager.literal("scale")
+                                .then(ClientCommandManager.argument("factor", IntegerArgumentType.integer(1, 2)).executes(c -> {
+                                    CONFIG.standaloneResolutionScale = IntegerArgumentType.getInteger(c, "factor");
+                                    c.getSource().sendFeedback(Text.literal("GSR : reflet en 1/" + CONFIG.standaloneResolutionScale + " de résolution"));
+                                    return 1;
+                                })))));
 
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(() -> ensureWorld(null)));
         LOG.info("GSR (Gaussian Space Reflections) initialisé");

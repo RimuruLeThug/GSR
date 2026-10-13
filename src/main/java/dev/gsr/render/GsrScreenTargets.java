@@ -2,11 +2,19 @@ package dev.gsr.render;
 
 import static org.lwjgl.opengl.GL43C.*;
 
-/** Cibles écran du mode autonome : reflet brut, historique (ping-pong), distance caméra (ping-pong). */
+/**
+ * Cibles écran du mode autonome. Pleine résolution : profondeur opaque. Basse résolution (écran / scale) :
+ * reflet brut, historique (ping-pong), distance caméra du pixel représentatif (ping-pong).
+ */
 public final class GsrScreenTargets {
-    /** reflet RGBA16F 8 + profondeur opaque R32F 4 + 2 × historique RGBA16F 8 + 2 × distance R32F 4. */
-    public static final int BYTES_PER_PIXEL = 8 + 4 + 2 * 8 + 2 * 4;
+    /** Profondeur opaque R32F. */
+    private static final int FULL_BYTES_PER_PIXEL = 4;
+    /** reflet RGBA16F 8 + 2 × historique RGBA16F 8 + 2 × distance R32F 4. */
+    private static final int LOW_BYTES_PER_PIXEL = 8 + 2 * 8 + 2 * 4;
+
     public int width = -1, height = -1;
+    /** Facteur de réduction des passes reflet + temporel (1 ou 2) et taille correspondante. */
+    public int scale = 1, lowWidth, lowHeight;
     public int reflection;
     /** Profondeur opaque copiée avant la couche translucide (masque eau/translucide). */
     public int opaqueDepth;
@@ -15,26 +23,31 @@ public final class GsrScreenTargets {
     public int current;           // index écrit cette frame
     public boolean historyValid;
 
-    public void ensureSize(int w, int h) {
-        if (w == width && h == height) return;
+    public void ensureSize(int w, int h, int s) {
+        if (w == width && h == height && s == scale) return;
         delete();
-        width = w; height = h;
-        reflection = tex(GL_RGBA16F, GL_NEAREST);
-        opaqueDepth = tex(GL_R32F, GL_NEAREST);
+        width = w; height = h; scale = s;
+        lowWidth = (w + s - 1) / s; lowHeight = (h + s - 1) / s;
+        opaqueDepth = tex(GL_R32F, GL_NEAREST, w, h);
+        reflection = tex(GL_RGBA16F, GL_NEAREST, lowWidth, lowHeight);
         for (int i = 0; i < 2; i++) {
-            history[i] = tex(GL_RGBA16F, GL_LINEAR);   // bilinéaire pour la reprojection
-            distance[i] = tex(GL_R32F, GL_LINEAR);
+            history[i] = tex(GL_RGBA16F, GL_LINEAR, lowWidth, lowHeight);   // bilinéaire pour la reprojection
+            distance[i] = tex(GL_R32F, GL_LINEAR, lowWidth, lowHeight);
         }
         historyValid = false;
+    }
+
+    public long bytes() {
+        return width < 0 ? 0 : (long) width * height * FULL_BYTES_PER_PIXEL + (long) lowWidth * lowHeight * LOW_BYTES_PER_PIXEL;
     }
 
     public void swap() { current ^= 1; historyValid = true; }
     public int prev() { return current ^ 1; }
 
-    private int tex(int fmt, int filter) {
+    private static int tex(int fmt, int filter, int w, int h) {
         int t = glGenTextures();
         glBindTexture(GL_TEXTURE_2D, t);
-        glTexStorage2D(GL_TEXTURE_2D, 1, fmt, width, height);
+        glTexStorage2D(GL_TEXTURE_2D, 1, fmt, w, h);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);

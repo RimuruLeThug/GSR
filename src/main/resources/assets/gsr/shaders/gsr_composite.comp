@@ -6,8 +6,35 @@ layout(local_size_x = 8, local_size_y = 8) in;
 #include "gsr_screen.glsl"
 
 layout(binding = 0) uniform sampler2D uDepth;
-layout(binding = 2) uniform sampler2D uReflection;     // historique accumulé (linéaire)
+layout(binding = 2) uniform sampler2D uReflection;     // historique accumulé (linéaire, basse résolution)
+layout(binding = 4) uniform sampler2D uReflDist;       // distance caméra du pixel représentatif (1e9 = vide)
 layout(rgba8, binding = 0) uniform image2D uScene;     // framebuffer principal (lecture/écriture)
+
+/*
+ * Upsampling guidé par la profondeur : les 4 texels basse résolution autour du pixel, pondérés
+ * bilinéairement × similarité de distance caméra (une silhouette ne bave pas sur l'arrière-plan).
+ * Le petit plancher bilinéaire fait qu'un pixel isolé prend, à défaut, le texel de distance la plus
+ * proche. En pleine résolution (uResScale = 1), revient exactement à lire le texel du pixel.
+ */
+vec4 upsampleReflection(ivec2 px, float dist) {
+    ivec2 lowMax = gsrLowResSize() - 1;
+    vec2 f = (vec2(px) + 0.5) / float(uResScale) - 0.5;
+    ivec2 b = ivec2(floor(f));
+    vec2 t = f - vec2(b);
+    float tol = 0.02 * dist + 0.05;
+    vec4 acc = vec4(0.0);
+    float wsum = 0.0;
+    for (int j = 0; j < 2; j++)
+        for (int i = 0; i < 2; i++) {
+            ivec2 q = clamp(b + ivec2(i, j), ivec2(0), lowMax);
+            vec4 h = texelFetch(uReflection, q, 0);
+            if (h.a <= 0.0) continue;
+            float bil = (i == 0 ? 1.0 - t.x : t.x) * (j == 0 ? 1.0 - t.y : t.y);
+            float w = (bil + 1e-3) * exp(-abs(texelFetch(uReflDist, q, 0).r - dist) / tol);
+            acc += h * w; wsum += w;
+        }
+    return wsum > 1e-30 ? acc / wsum : vec4(0.0);
+}
 
 // Approximation analytique de la BRDF d'environnement (Karis, "Mobile PBR")
 vec2 envBRDFApprox(float NoV, float rough) {
@@ -23,9 +50,7 @@ void main() {
     if (any(greaterThanEqual(px, ivec2(uScreenSize)))) return;
     float d = texelFetch(uDepth, px, 0).r;
     if (d >= 1.0) return;
-
-    vec4 refl = texelFetch(uReflection, px, 0);
-    if (refl.a <= 0.0) return;                         // pas d'historique = pas de reflet
+    if (uFloorStrength <= 0.0 && gsrTranslucentMask(px, d) == 0.0) return;   // test bon marché
 
     vec2 uv = (vec2(px) + 0.5) / uScreenSize;
     vec3 vp = gsrViewPos(uv, d);
@@ -34,6 +59,9 @@ void main() {
     float rough, mask;
     gsrStandaloneMaterial(N, px, d, rough, mask);
     if (mask <= 0.001) return;
+
+    vec4 refl = upsampleReflection(px, length(vp));
+    if (refl.a <= 0.0) return;                         // pas d'historique = pas de reflet
 
     float NoV = clamp(dot(nV, -normalize(vp)), 1e-3, 1.0);
     const float F0 = 0.02;                             // eau / diélectriques

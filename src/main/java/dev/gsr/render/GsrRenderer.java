@@ -156,13 +156,13 @@ public final class GsrRenderer {
     }
 
     /** WorldRenderEvents.BEFORE_DEBUG_RENDER : la couche translucide n'est pas encore dessinée. */
-    public void captureOpaqueDepth(WorldRenderContext ctx) {
+    public void captureOpaqueDepth(WorldRenderContext ctx, GsrConfig cfg) {
         if (!initialized) return;
         Framebuffer fb = MinecraftClient.getInstance().getFramebuffer();
         int w = fb.textureWidth, h = fb.textureHeight;
         int[] state = saveGlState();
         try {
-            targets.ensureSize(w, h);
+            targets.ensureSize(w, h, cfg.standaloneResolutionScale);
             glUseProgram(progDepthCopy);
             glUniform2f(loc(progDepthCopy, "uScreenSize"), w, h);
             bindTex(0, fb.getDepthAttachment());
@@ -182,7 +182,8 @@ public final class GsrRenderer {
         Framebuffer fb = MinecraftClient.getInstance().getFramebuffer();
         int w = fb.textureWidth, h = fb.textureHeight;
         // Sans profondeur opaque de CETTE frame, le masque eau/translucide serait faux : on saute.
-        if (!opaqueDepthCaptured || targets.width != w || targets.height != h) return;
+        if (!opaqueDepthCaptured || targets.width != w || targets.height != h
+                || targets.scale != cfg.standaloneResolutionScale) return;
         opaqueDepthCaptured = false;
         int depthTex = sceneDepthTexture(ctx, fb);
 
@@ -194,6 +195,8 @@ public final class GsrRenderer {
             Matrix4f invProj = new Matrix4f(proj).invert();
             Matrix4f invView = new Matrix4f(view).invert();
             int gx = (w + 7) / 8, gy = (h + 7) / 8;
+            // Passes reflet + temporel en basse résolution ; la composition reste en pleine résolution.
+            int lgx = (targets.lowWidth + 7) / 8, lgy = (targets.lowHeight + 7) / 8;
             int cur = targets.current, prev = targets.prev();
 
             // 1) SSR -> GSR -> ciel
@@ -204,7 +207,7 @@ public final class GsrRenderer {
             bindTex(1, fb.getColorAttachment());
             glBindImageTexture(0, targets.reflection, 0, false, 0, GL_WRITE_ONLY, GL_RGBA16F);
             timer.begin(T_REFLECT);
-            glDispatchCompute(gx, gy, 1);
+            glDispatchCompute(lgx, lgy, 1);
             timer.end(T_REFLECT);
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 
@@ -223,7 +226,7 @@ public final class GsrRenderer {
             glBindImageTexture(0, targets.history[cur], 0, false, 0, GL_WRITE_ONLY, GL_RGBA16F);
             glBindImageTexture(1, targets.distance[cur], 0, false, 0, GL_WRITE_ONLY, GL_R32F);
             timer.begin(T_TEMPORAL);
-            glDispatchCompute(gx, gy, 1);
+            glDispatchCompute(lgx, lgy, 1);
             timer.end(T_TEMPORAL);
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 
@@ -232,6 +235,7 @@ public final class GsrRenderer {
             setCommon(progComposite, proj, invProj, view, invView, w, h, cfg);
             bindTex(0, depthTex);
             bindTex(2, targets.history[cur]);
+            bindTex(4, targets.distance[cur]);
             glBindImageTexture(0, fb.getColorAttachment(), 0, false, 0, GL_READ_WRITE, GL_RGBA8);
             timer.begin(T_COMPOSITE);
             glDispatchCompute(gx, gy, 1);
@@ -270,9 +274,9 @@ public final class GsrRenderer {
         long ssbo = GsrFrameData.BYTES + (long) cfg.totalSlots() * (dev.gsr.core.GsrLayout.PAGE_META_BYTES
                 + dev.gsr.core.GsrLayout.CELLS_PER_PAGE * dev.gsr.core.GsrLayout.CELL_BYTES
                 + (long) cfg.maxSplatsPerPage * dev.gsr.core.GsrLayout.SPLAT_BYTES);
-        long screen = targets.width < 0 ? 0 : (long) targets.width * targets.height * GsrScreenTargets.BYTES_PER_PIXEL;
-        out.add(String.format("VRAM : SSBO %.1f Mio, cibles écran %.1f Mio (%dx%d)",
-                ssbo / 1048576.0, screen / 1048576.0, Math.max(0, targets.width), Math.max(0, targets.height)));
+        out.add(String.format("VRAM : SSBO %.1f Mio, cibles écran %.1f Mio (%dx%d, reflet 1/%d)",
+                ssbo / 1048576.0, targets.bytes() / 1048576.0, Math.max(0, targets.width), Math.max(0, targets.height),
+                cfg.standaloneResolutionScale));
     }
 
     /** Changement de monde : l'historique temporel n'a plus de sens. */
@@ -288,6 +292,7 @@ public final class GsrRenderer {
         set1f(p, "uRoughness", cfg.standaloneRoughness);
         set1f(p, "uStrength", cfg.standaloneStrength);
         set1f(p, "uFloorStrength", cfg.standaloneFloorStrength);
+        glUniform1i(loc(p, "uResScale"), targets.scale);
     }
 
     private static void bindTex(int unit, int tex) { glActiveTexture(GL_TEXTURE0 + unit); glBindTexture(GL_TEXTURE_2D, tex); }

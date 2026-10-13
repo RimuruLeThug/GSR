@@ -34,23 +34,23 @@ vec3 clipToAABB(vec3 center, vec3 extent, vec3 q) {
 }
 
 void main() {
-    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
-    if (any(greaterThanEqual(px, ivec2(uScreenSize)))) return;
+    ivec2 lp = ivec2(gl_GlobalInvocationID.xy);   // texel basse résolution
+    ivec2 lowSize = gsrLowResSize();
+    if (any(greaterThanEqual(lp, lowSize))) return;
 
-    vec4  cur = texelFetch(uCurrent, px, 0);
-    float d   = texelFetch(uDepth, px, 0).r;
-    if (d >= 1.0 || cur.a < 0.0) {
-        imageStore(uHistoryOut, px, vec4(0.0));
-        imageStore(uDistOut, px, vec4(1e9));
+    vec4 cur = texelFetch(uCurrent, lp, 0);
+    float d, rough, mask; vec3 vp, nV, N;
+    ivec2 px = gsrRepresentative(uDepth, lp, d, vp, nV, N, rough, mask);
+    if (mask <= 0.001 || cur.a < 0.0) {
+        imageStore(uHistoryOut, lp, vec4(0.0));
+        imageStore(uDistOut, lp, vec4(1e9));
         return;
     }
-
-    vec2 uv = (vec2(px) + 0.5) / uScreenSize;
-    vec3 vp = gsrViewPos(uv, d);
-    vec3 P  = (uInvView * vec4(vp, 1.0)).xyz;
-    vec3 N  = normalize(mat3(uInvView) * gsrViewNormalFromDepth(uDepth, px, vp));
-    float rough, mask;
-    gsrStandaloneMaterial(N, px, d, rough, mask);
+    vec3 P = (uInvView * vec4(vp, 1.0)).xyz;
+    // Le reflet vient du pixel représentatif, mais l'historique est stocké au centre du texel :
+    // on lit l'historique décalé d'autant, sinon chaque frame le rééchantillonnerait de ¼ de texel
+    // (flou cumulatif caméra immobile).
+    vec2 corr = (vec2(lp * uResScale) + 0.5 * float(uResScale) - (vec2(px) + 0.5)) / uScreenSize;
 
     // ---- reprojection hybride surface / image virtuelle ----
     vec3 Pprev = P + uCamDelta;
@@ -64,7 +64,7 @@ void main() {
               && all(greaterThanEqual(uvPrev, vec2(0.0))) && all(lessThanEqual(uvPrev, vec2(1.0)))
               && all(greaterThanEqual(uvSurf, vec2(0.0))) && all(lessThanEqual(uvSurf, vec2(1.0)));
     if (valid) {   // désocclusion : la surface était-elle visible au même endroit ?
-        float prevDist = textureLod(uPrevDist, uvSurf, 0.0).r;
+        float prevDist = textureLod(uPrevDist, gsrScreenToLowUV(uvSurf + corr), 0.0).r;
         float expected = length(Pprev);
         valid = abs(prevDist - expected) < 0.05 * expected + 0.1;
     }
@@ -74,7 +74,7 @@ void main() {
     float n = 0.0;
     for (int y = -1; y <= 1; y++)
         for (int x = -1; x <= 1; x++) {
-            vec4 s = texelFetch(uCurrent, clamp(px + ivec2(x, y), ivec2(0), ivec2(uScreenSize) - 1), 0);
+            vec4 s = texelFetch(uCurrent, clamp(lp + ivec2(x, y), ivec2(0), lowSize - 1), 0);
             if (s.a < 0.0) continue;
             vec3 c = toYCoCg(s.rgb);
             m1 += c; m2 += c * c; n += 1.0;
@@ -83,13 +83,13 @@ void main() {
     vec3 sigma = sqrt(max(m2 - m1 * m1, vec3(0.0)));
     float gamma = mix(1.0, 2.5, rough);
 
-    vec4 hist = textureLod(uHistory, uvPrev, 0.0);
+    vec4 hist = textureLod(uHistory, gsrScreenToLowUV(uvPrev + corr), 0.0);
     vec3 histC = fromYCoCg(clipToAABB(m1, gamma * sigma, toYCoCg(hist.rgb)));
 
     float maxLen = mix(12.0, 48.0, rough);
     float len = valid ? min(hist.a + 1.0, maxLen) : 1.0;
     vec3 outC = mix(histC, cur.rgb, 1.0 / len);
 
-    imageStore(uHistoryOut, px, vec4(outC, len));
-    imageStore(uDistOut, px, vec4(length(P)));
+    imageStore(uHistoryOut, lp, vec4(outC, len));
+    imageStore(uDistOut, lp, vec4(length(P)));
 }

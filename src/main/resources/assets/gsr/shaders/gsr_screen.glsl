@@ -13,6 +13,7 @@ uniform int   uFrame;
 uniform float uRoughness;   // rugosité uniforme (mode autonome : pas de G-buffer matériau)
 uniform float uStrength;
 uniform float uFloorStrength; // force sur les sols OPAQUES orientés vers le haut (0 = eau/translucides seuls)
+uniform int   uResScale;    // passes reflet + temporel : 1 = pleine résolution, 2 = demi-résolution
 
 // Profondeur opaque (copiée avant la couche translucide) : sert au masque eau/translucide.
 layout(binding = 5) uniform sampler2D uOpaqueDepth;
@@ -63,6 +64,40 @@ void gsrStandaloneMaterial(vec3 nWorld, ivec2 px, float d, out float rough, out 
     rough = uRoughness;
     float kind = mix(uFloorStrength, 1.0, gsrTranslucentMask(px, d));
     mask  = smoothstep(0.85, 0.97, nWorld.y) * kind * uStrength;
+}
+
+// ---- Basse résolution (passes reflet + temporel) ----
+ivec2 gsrLowResSize() { return (ivec2(uScreenSize) + uResScale - 1) / uResScale; }
+
+// uv écran -> uv de la cible basse résolution (exact aussi pour une taille d'écran impaire).
+vec2 gsrScreenToLowUV(vec2 uv) { return uv * uScreenSize / vec2(gsrLowResSize() * uResScale); }
+
+/*
+ * Pixel plein écran représentant le texel basse résolution lp : le premier pixel du bloc
+ * uResScale² (ordre fixe -> stable d'une frame à l'autre) qui porte un reflet. Un bloc à cheval
+ * sur un bord d'eau a ainsi toujours un échantillon d'eau. mask = 0 si aucun pixel ne reflète.
+ * Déterministe : les passes reflet et temporelle choisissent le même pixel.
+ */
+ivec2 gsrRepresentative(sampler2D depthTex, ivec2 lp, out float d, out vec3 vp, out vec3 nV, out vec3 N,
+                        out float rough, out float mask) {
+    ivec2 base = lp * uResScale;
+    d = 1.0; vp = vec3(0.0); nV = vec3(0.0, 0.0, 1.0); N = vec3(0.0, 1.0, 0.0); rough = uRoughness; mask = 0.0;
+    for (int j = 0; j < uResScale; j++)
+        for (int i = 0; i < uResScale; i++) {
+            ivec2 px = base + ivec2(i, j);
+            if (any(greaterThanEqual(px, ivec2(uScreenSize)))) continue;
+            d = texelFetch(depthTex, px, 0).r;
+            if (d >= 1.0) continue;
+            // Test bon marché d'abord : sans reflet sur les sols opaques, seuls les translucides comptent.
+            if (uFloorStrength <= 0.0 && gsrTranslucentMask(px, d) == 0.0) continue;
+            vp = gsrViewPos((vec2(px) + 0.5) / uScreenSize, d);
+            nV = gsrViewNormalFromDepth(depthTex, px, vp);
+            N  = normalize(mat3(uInvView) * nV);
+            gsrStandaloneMaterial(N, px, d, rough, mask);
+            if (mask > 0.001) return px;
+        }
+    mask = 0.0;
+    return base;
 }
 
 // Bruit : interleaved gradient noise + séquence R2 (faible discrépance) décalée par frame.

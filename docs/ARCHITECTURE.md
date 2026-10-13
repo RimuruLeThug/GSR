@@ -99,8 +99,20 @@ déclenche aucune reconstruction.
   `ivec4(pageXYZ, count)` permet au shader de rejeter un slot périmé.
 * **Budget par défaut** : 1024 slots × 64 Kio = **64 Mio** de splats + 2 Mio de cellules + 16 Kio de
   méta. Réglable (`pagesX/Y/Z`, `levels`, `maxSplatsPerPage`).
-* Cibles écran du mode autonome : 36 o/pixel (≈ 120 Mio en 2560×1369, mesuré) — le passage du reflet en demi-
-  résolution est la première optimisation prévue (voir §6).
+* Cibles écran du mode autonome : profondeur opaque en pleine résolution (4 o/pixel) + reflet,
+  historique et distance en basse résolution (32 o/texel). En demi-résolution (défaut) : 12 o/pixel,
+  ≈ 40 Mio en 2560×1369 (calculé ; 120 Mio mesurés en pleine résolution).
+
+### Demi-résolution (`standaloneResolutionScale`, `/gsr scale 1|2`)
+Les passes 1 et 2 travaillent sur une grille ÷`scale`. Chaque texel choisit un **pixel représentatif**
+dans son bloc `scale²` : le premier, dans un ordre fixe, qui porte un reflet (`gsrRepresentative`).
+Un bloc à cheval sur un bord d'eau garde donc un échantillon d'eau, et le choix est déterministe :
+les deux passes retrouvent le même pixel sans cible intermédiaire. La passe temporelle lit
+l'historique décalé de (centre du texel − pixel représentatif). Sans ce décalage, chaque frame
+rééchantillonnerait l'historique d'¼ de texel, ce qui flouterait l'image en continu même caméra immobile.
+La composition (pleine résolution) agrège les 4 texels voisins avec une **pondération bilinéaire ×
+similarité de distance caméra** (tolérance 2 % + 5 cm). Cette distance est celle de la cible
+`distance` de la passe temporelle. Avec `scale = 1`, on retrouve exactement l'ancien comportement.
 
 ## 4. Pipeline de rendu
 
@@ -210,11 +222,14 @@ Splats chargés : ≈ 60–80 k (L0), 120–160 k (L1), 100–115 k (L2), 15–1
 budget, si bien que la file ne se vidait jamais. Désormais seule une vraie copie consomme le budget
 (tentatives plafonnées à 64 × budget par tick). Test de non-régression dans `CoreSelfTest`.
 
-**Non vérifié** : mode « Fabuleux », Sodium, Iris,
-pilotes NVIDIA/Intel, nuit/pluie/Nether, coût GPU (pas encore de requêtes `GL_TIME_ELAPSED`).
+**Demi-résolution (2026-10-13)** : compile, tests du cœur OK, shaders compilés et monde chargé sans
+erreur sur RX 7800 XT. **Pas encore vérifié** : qualité visuelle (bords d'eau, silhouettes) et gain
+mesuré. À relever avec `/gsr stats` après `/gsr scale 1` puis `/gsr scale 2`, au même endroit.
+
+**Non vérifié** : mode « Fabuleux », Sodium, Iris, pilotes NVIDIA/Intel, nuit/pluie/Nether.
 
 Prochaines étapes, par ordre de rentabilité :
-1. Reflet en **demi-résolution** + upsampling guidé par la profondeur (÷4 sur les passes 1–2).
+1. ~~Reflet en **demi-résolution** + upsampling guidé par la profondeur~~ (fait, mesures à relever).
 2. **Masque d'occupation par page** (512 bits) pour sauter les cellules vides sans lire `cells[]`.
 3. Albédo depuis la **moyenne réelle des sprites** de l'atlas (au lieu de `MapColor`), teinte de biome.
 4. Mode autonome : le masque par profondeur (passe 0) ne distingue pas l'eau du verre teinté ni de la

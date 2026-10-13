@@ -42,6 +42,11 @@ public final class GsrConfig {
      * 0 par défaut : un sol mat en miroir donne un voile laiteux aux angles rasants (Fresnel).
      */
     public float standaloneFloorStrength = 0.0f;
+    /**
+     * Réduction de résolution des passes reflet + temporel (1 = pleine, 2 = demi-résolution : ÷4 pixels).
+     * La composition reste en pleine résolution avec un upsampling guidé par la profondeur.
+     */
+    public int standaloneResolutionScale = 2;
     /** Distance max (blocs) d'un rayon GSR. */
     public float maxTraceDistance = 384f;
 
@@ -56,6 +61,7 @@ public final class GsrConfig {
 
     public GsrConfig validate() {
         levels = Math.max(1, Math.min(GsrLayout.MAX_LEVELS, levels));
+        standaloneResolutionScale = Math.max(1, Math.min(2, standaloneResolutionScale));
         if (maxSplatsPerPage > 0xFFFF) throw new IllegalArgumentException("maxSplatsPerPage > 65535 (offset 16 bits)");
         return this;
     }

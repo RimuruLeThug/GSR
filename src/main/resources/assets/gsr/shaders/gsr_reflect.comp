@@ -63,21 +63,13 @@ float ssrTrace(vec3 vp, vec3 rv, ivec2 px, out vec2 hitUV, out float hitDist) {
 }
 
 void main() {
-    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
-    if (any(greaterThanEqual(px, ivec2(uScreenSize)))) return;
+    ivec2 lp = ivec2(gl_GlobalInvocationID.xy);   // texel de la cible (basse résolution)
+    if (any(greaterThanEqual(lp, gsrLowResSize()))) return;
 
-    float d = texelFetch(uDepth, px, 0).r;
-    if (d >= 1.0) { imageStore(uReflOut, px, vec4(0.0, 0.0, 0.0, -1.0)); return; }
-
-    vec2 uv = (vec2(px) + 0.5) / uScreenSize;
-    vec3 vp = gsrViewPos(uv, d);
-    vec3 nV = gsrViewNormalFromDepth(uDepth, px, vp);
+    float d, rough, mask; vec3 vp, nV, N;
+    ivec2 px = gsrRepresentative(uDepth, lp, d, vp, nV, N, rough, mask);
+    if (mask <= 0.001) { imageStore(uReflOut, lp, vec4(0.0, 0.0, 0.0, -1.0)); return; }
     vec3 P  = (uInvView * vec4(vp, 1.0)).xyz;           // relatif caméra, non tourné
-    vec3 N  = normalize(mat3(uInvView) * nV);
-
-    float rough, mask;
-    gsrStandaloneMaterial(N, px, d, rough, mask);
-    if (mask <= 0.001) { imageStore(uReflOut, px, vec4(0.0, 0.0, 0.0, -1.0)); return; }
 
     // Direction : miroir parfait, ou microfacette GGX tirée (bruit -> lissé par la passe temporelle)
     vec3 Vw = normalize(P);
@@ -112,5 +104,5 @@ void main() {
         col  = mix(g, ssrCol, conf);
         dist = mix(gh.hitDist, ssrDist, conf);
     }
-    imageStore(uReflOut, px, vec4(col, dist));
+    imageStore(uReflOut, lp, vec4(col, dist));
 }
