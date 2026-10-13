@@ -21,8 +21,8 @@ public final class CpuReferenceTracer implements GpuSink {
     public CpuReferenceTracer(GsrConfig cfg) {
         this.cfg = cfg;
         int slots = cfg.totalSlots();
-        meta = new int[slots * 4];
-        for (int i = 0; i < slots; i++) meta[i * 4] = GsrLayout.INVALID_PAGE_COORD;
+        meta = new int[slots * 8]; // = GsrPageMeta : ivec4 page + uvec4 mask
+        for (int i = 0; i < slots; i++) meta[i * 8] = GsrLayout.INVALID_PAGE_COORD;
         cells = new int[slots * GsrLayout.CELLS_PER_PAGE];
         splats = ByteBuffer.allocate(slots * cfg.maxSplatsPerPage * GsrLayout.SPLAT_BYTES).order(ByteOrder.LITTLE_ENDIAN);
     }
@@ -32,16 +32,18 @@ public final class CpuReferenceTracer implements GpuSink {
         System.arraycopy(p.cells(), 0, cells, slot * GsrLayout.CELLS_PER_PAGE, GsrLayout.CELLS_PER_PAGE);
         int base = slot * cfg.maxSplatsPerPage * GsrLayout.SPLAT_BYTES;
         for (int i = 0; i < p.splatCount() * GsrLayout.SPLAT_BYTES; i++) splats.put(base + i, p.splats().get(i));
-        meta[slot * 4] = p.key().x(); meta[slot * 4 + 1] = p.key().y(); meta[slot * 4 + 2] = p.key().z();
-        meta[slot * 4 + 3] = p.splatCount();
+        meta[slot * 8] = p.key().x(); meta[slot * 8 + 1] = p.key().y(); meta[slot * 8 + 2] = p.key().z();
+        meta[slot * 8 + 3] = p.splatCount();
+        meta[slot * 8 + 4] = (int) p.brickMask(); meta[slot * 8 + 5] = (int) (p.brickMask() >>> 32);
     }
     @Override public void invalidate(int slot) {
-        meta[slot * 4] = GsrLayout.INVALID_PAGE_COORD; meta[slot * 4 + 3] = 0;
+        meta[slot * 8] = GsrLayout.INVALID_PAGE_COORD; meta[slot * 8 + 3] = 0;
+        meta[slot * 8 + 4] = 0; meta[slot * 8 + 5] = 0;
     }
 
     /** Splats du slot selon la méta « GPU », −1 si le slot est invalide (tests). */
     int metaSplats(int slot) {
-        return meta[slot * 4] == GsrLayout.INVALID_PAGE_COORD ? -1 : meta[slot * 4 + 3];
+        return meta[slot * 8] == GsrLayout.INVALID_PAGE_COORD ? -1 : meta[slot * 8 + 3];
     }
 
     public void syncFrom(GaussianClipmap clip) {
@@ -49,7 +51,7 @@ public final class CpuReferenceTracer implements GpuSink {
     }
 
     // ---------------------------------------------------------------- miroir GLSL
-    public static final class Hit { public float r, g, b, transmittance = 1f, hitDist; public int level = -1; }
+    public static final class Hit { public float r, g, b, transmittance = 1f, hitDist; public int level = -1, steps; }
 
     private float relX(int b) { return (float) (b - frame.camBx) - frame.camFx; }
     private float relY(int b) { return (float) (b - frame.camBy) - frame.camFy; }
@@ -69,6 +71,7 @@ public final class CpuReferenceTracer implements GpuSink {
         float hitW = 0, hitAcc = 0;
         float t = tMin;
         for (int step = 0; step < 160 && t < tMax; step++) {
+            h.steps = step + 1;
             float px = ox + dx * t, py = oy + dy * t, pz = oz + dz * t;
             float fp = coneBase + coneTan * t;
             int L = Math.max(0, Math.min(levels - 1, (int) Math.ceil(Math.log(Math.max(fp, 1f)) / Math.log(2))));
@@ -87,10 +90,15 @@ public final class CpuReferenceTracer implements GpuSink {
 
             int slot = slotIndex(L, pgx, pgy, pgz);
             int vs = 1 << L;
-            boolean valid = meta[slot * 4] == pgx && meta[slot * 4 + 1] == pgy && meta[slot * 4 + 2] == pgz && meta[slot * 4 + 3] > 0;
+            boolean valid = meta[slot * 8] == pgx && meta[slot * 8 + 1] == pgy && meta[slot * 8 + 2] == pgz && meta[slot * 8 + 3] > 0;
             int cx = (vx & 15) >> 1, cy = (vy & 15) >> 1, cz = (vz & 15) >> 1;
+            int brx = cx >> 1, bry = cy >> 1, brz = cz >> 1;
+            int bi = brx + 4 * (bry + 4 * brz);
+            int bits = bi < 32 ? meta[slot * 8 + 4] : meta[slot * 8 + 5];
+            boolean occupied = valid && ((bits >>> (bi & 31)) & 1) != 0;
             int mx, my, mz; float size;
-            if (valid) { mx = (pgx * 16 + cx * 2) * vs; my = (pgy * 16 + cy * 2) * vs; mz = (pgz * 16 + cz * 2) * vs; size = 2 * vs; }
+            if (occupied) { mx = (pgx * 16 + cx * 2) * vs; my = (pgy * 16 + cy * 2) * vs; mz = (pgz * 16 + cz * 2) * vs; size = 2 * vs; }
+            else if (valid) { mx = (pgx * 16 + brx * 4) * vs; my = (pgy * 16 + bry * 4) * vs; mz = (pgz * 16 + brz * 4) * vs; size = 4 * vs; }
             else { mx = pgx * 16 * vs; my = pgy * 16 * vs; mz = pgz * 16 * vs; size = 16 * vs; }
             float bminX = relX(mx), bminY = relY(my), bminZ = relZ(mz);
             float tfx = Math.max((bminX - ox) * ix, (bminX + size - ox) * ix);
@@ -98,7 +106,7 @@ public final class CpuReferenceTracer implements GpuSink {
             float tfz = Math.max((bminZ - oz) * iz, (bminZ + size - oz) * iz);
             float tExit = Math.min(Math.min(tfx, tfy), tfz);
 
-            if (valid) {
+            if (occupied) {
                 int c = cells[slot * 512 + cx + 8 * (cy + 8 * cz)];
                 int off = c & 0xFFFF, count = c >>> 16;
                 if (count > 0) {

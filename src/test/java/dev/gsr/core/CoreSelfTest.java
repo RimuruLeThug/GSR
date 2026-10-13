@@ -128,6 +128,34 @@ public final class CoreSelfTest {
             check(inCell, "chaque splat est sur la frontière de sa cellule");
         }
 
+        System.out.println("== Masque de briques");
+        {
+            // Un seul bloc en (5, 9, 13) -> cellule (2, 4, 6) -> brique (1, 2, 3) ; ses faces débordent
+            // sur les cellules voisines, mais toutes restent dans des briques dont le bit doit être mis.
+            VoxelSource one = new VoxelSource() {
+                public int kind(int x, int y, int z) { return x == 5 && y == 9 && z == 13 ? GsrLayout.KIND_OPAQUE : GsrLayout.KIND_AIR; }
+                public int albedo(int x, int y, int z) { return 0xFF808080; }
+                public int light(int x, int y, int z) { return 0xF0; }
+                public int emission(int x, int y, int z) { return 0; }
+            };
+            PageData pd = SplatGenerator.generate(new PageKey(0, 0, 0, 0), 1, VoxelGrid.fromSource(one), new GsrConfig());
+            boolean exact = true;
+            for (int c = 0; c < GsrLayout.CELLS_PER_PAGE; c++) {
+                int cx = c % 8, cy = (c / 8) % 8, cz = c / 64;
+                boolean bit = ((pd.brickMask() >>> GsrLayout.brickIndex(cx >> 1, cy >> 1, cz >> 1)) & 1) != 0;
+                if ((pd.cells()[c] >>> 16) > 0 && !bit) exact = false;
+            }
+            check(exact && Long.bitCount(pd.brickMask()) == 1 && pd.brickMask() == 1L << GsrLayout.brickIndex(1, 2, 3),
+                    "bloc isolé -> un seul bit, celui de sa brique (masque=" + Long.toHexString(pd.brickMask()) + ")");
+            long high = SplatGenerator.generate(new PageKey(0, 0, 0, 0), 1, VoxelGrid.fromSource(new VoxelSource() {
+                public int kind(int x, int y, int z) { return x == 15 && y == 15 && z == 15 ? GsrLayout.KIND_OPAQUE : GsrLayout.KIND_AIR; }
+                public int albedo(int x, int y, int z) { return 0xFF808080; }
+                public int light(int x, int y, int z) { return 0xF0; }
+                public int emission(int x, int y, int z) { return 0; }
+            }), new GsrConfig()).brickMask();
+            check(high == 1L << 63, "brique 63 -> bit 63 (moitié haute, mask.y)");
+        }
+
         System.out.println("== Résumés de section");
         {
             World w = new World();
@@ -170,6 +198,12 @@ public final class CoreSelfTest {
             float len = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
             h = gpu.trace(0, 0, 0, dx / len, dy / len, dz / len, 0.05f, 300, 0, 0);
             check(h.transmittance < 0.05f && h.b > h.r, String.format("rayon vers l'étang : eau translucide puis fond (T=%.3f, b>r)", h.transmittance));
+
+            // Rayon horizontal à y = 69 sur 20 blocs : pages valides (le sol y est), mais briques y 68-71
+            // vides. Cellule par cellule : ≥ 10 pas ; avec le masque de briques : ~5.
+            h = gpu.trace(0, -1.5f, 0, 0, 0, 1, 0.05f, 20, 0, 0);
+            check(h.transmittance > 0.99f && h.steps <= 6,
+                    "briques vides franchies sans lire les cellules (" + h.steps + " pas pour 20 blocs, T=" + h.transmittance + ")");
 
             h = gpu.trace(0, 0, 0, 0, -1, 0, 0.05f, 300, 0.5f, 0);
             check(Math.abs(h.hitDist - 5.5f) < 1.5f && h.transmittance < 0.1f,

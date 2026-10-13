@@ -115,6 +115,6 @@ public final class SplatGenerator {
             buf.putFloat(base + 24, sigmaN);      // data.z : floatBitsToUint(σn)
             buf.putInt(base + 28, 0);             // data.w : réservé (ID matériau, rugosité...)
         }
-        return new PageData(key, version, kept, buf, cells);
+        return new PageData(key, version, kept, buf, cells, GsrLayout.brickMask(cells));
     }
 }

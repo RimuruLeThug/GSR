@@ -17,7 +17,7 @@ import static org.lwjgl.opengl.GL43C.*;
  * Les 4 SSBO du GSR. Allocation fixe au démarrage (pas de fragmentation, pas de réallocation) :
  *
  *  binding base+0  frame   : 208 o
- *  binding base+1  meta    : slots × 16 o              (ivec4 pageXYZ + count)
+ *  binding base+1  meta    : slots × 32 o              (ivec4 pageXYZ + count, uvec4 masque de briques)
  *  binding base+2  cells   : slots × 512 × 4 o         (offset | count << 16)
  *  binding base+3  splats  : slots × maxSplats × 32 o  (slab fixe par slot)
  *
@@ -41,7 +41,7 @@ public final class GsrGpuResources implements GpuSink {
         splatBuf = createBuffer(slots * splatSlotBytes);
 
         ByteBuffer meta = MemoryUtil.memAlloc(slots * GsrLayout.PAGE_META_BYTES).order(ByteOrder.LITTLE_ENDIAN);
-        for (int i = 0; i < slots; i++) meta.putInt(GsrLayout.INVALID_PAGE_COORD).putInt(0).putInt(0).putInt(0);
+        for (int i = 0; i < slots; i++) meta.putInt(GsrLayout.INVALID_PAGE_COORD).putInt(0).putInt(0).putInt(0).putLong(0L).putLong(0L);
         meta.flip();
         metaBuf = glGenBuffers();
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, metaBuf);
@@ -69,19 +69,20 @@ public final class GsrGpuResources implements GpuSink {
         cellScratch.clear(); cellScratch.put(page.cells()).flip();
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, cellBuf);
         glBufferSubData(GL_SHADER_STORAGE_BUFFER, (long) slot * GsrLayout.CELLS_PER_PAGE * GsrLayout.CELL_BYTES, cellScratch);
-        writeMeta(slot, page.key().x(), page.key().y(), page.key().z(), page.splatCount());
+        writeMeta(slot, page.key().x(), page.key().y(), page.key().z(), page.splatCount(), page.brickMask());
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
     }
 
     @Override
     public void invalidate(int slot) {
-        writeMeta(slot, GsrLayout.INVALID_PAGE_COORD, 0, 0, 0);
+        writeMeta(slot, GsrLayout.INVALID_PAGE_COORD, 0, 0, 0, 0L);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
     }
 
-    private void writeMeta(int slot, int x, int y, int z, int count) {
+    private void writeMeta(int slot, int x, int y, int z, int count, long brickMask) {
         metaScratch.clear();
-        metaScratch.putInt(x).putInt(y).putInt(z).putInt(count).flip();
+        // Little-endian : putLong écrit mask.x = bits 0..31 puis mask.y = bits 32..63.
+        metaScratch.putInt(x).putInt(y).putInt(z).putInt(count).putLong(brickMask).putLong(0L).flip();
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, metaBuf);
         glBufferSubData(GL_SHADER_STORAGE_BUFFER, (long) slot * GsrLayout.PAGE_META_BYTES, metaScratch);
     }

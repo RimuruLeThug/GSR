@@ -21,8 +21,13 @@ public final class GsrLayout {
 
     /** std430 : struct GsrSplat { vec4 posSigmaT; uvec4 data; } */
     public static final int SPLAT_BYTES = 32;
-    /** std430 : ivec4 (pageX, pageY, pageZ, splatCount) */
-    public static final int PAGE_META_BYTES = 16;
+    /**
+     * std430 : struct GsrPageMeta { ivec4 page; uvec4 mask; }
+     *   page = (pageX, pageY, pageZ, splatCount), mask.xy = masque de briques 64 bits, mask.zw réservés.
+     */
+    public static final int PAGE_META_BYTES = 32;
+    /** Brique = 2 x 2 x 2 cellules = 4³ voxels -> 4 x 4 x 4 = 64 briques par page (1 bit chacune). */
+    public static final int BRICKS_PER_AXIS = CELLS_PER_AXIS / 2; // 4
     /** std430 : uint (offset | count << 16) */
     public static final int CELL_BYTES = 4;
 
@@ -40,6 +45,21 @@ public final class GsrLayout {
 
     public static int cellIndex(int cx, int cy, int cz) {
         return cx + CELLS_PER_AXIS * (cy + CELLS_PER_AXIS * cz);
+    }
+
+    public static int brickIndex(int bx, int by, int bz) {
+        return bx + BRICKS_PER_AXIS * (by + BRICKS_PER_AXIS * bz);
+    }
+
+    /** Masque des briques contenant au moins un splat, d'après la table de cellules (offset | count << 16). */
+    public static long brickMask(int[] cells) {
+        long mask = 0;
+        for (int c = 0; c < CELLS_PER_PAGE; c++) {
+            if ((cells[c] >>> 16) == 0) continue;
+            int cx = c % CELLS_PER_AXIS, cy = (c / CELLS_PER_AXIS) % CELLS_PER_AXIS, cz = c / (CELLS_PER_AXIS * CELLS_PER_AXIS);
+            mask |= 1L << brickIndex(cx >> 1, cy >> 1, cz >> 1);
+        }
+        return mask;
     }
 
     // ---- Packing de data.y (doit correspondre à gsr_common.glsl) ----

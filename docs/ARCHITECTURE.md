@@ -10,7 +10,7 @@ en dernier recours. Aucun ray tracing matériel : uniquement OpenGL 4.3 (compute
  MONDE (ClientWorld)                CPU (workers)                         GPU
  ──────────────────                 ─────────────                         ───
  bloc modifié ─┐                                                    SSBO frame   (208 o)
- lumière ──────┼─► file de capture ─► snapshot  ──► SectionSummary ─┐  SSBO meta   (ivec4 / page)
+ lumière ──────┼─► file de capture ─► snapshot  ──► SectionSummary ─┐  SSBO meta   (32 o / page)
  chunk chargé ─┘   (priorité         (copie         (mips 2/4/8 b)  │  SSBO cells  (512 / page)
                     distance)        Paletted-                      │  SSBO splats (slab / page)
                                      Container)  ┌─ si page L0 ─────┤        │
@@ -96,8 +96,9 @@ déclenche aucune reconstruction.
 * **Stockage toroïdal** : la page `p` occupe le slot `floorMod(p, dims)`. Quand le joueur avance, seules
   les pages qui entrent dans la fenêtre sont reconstruites ; rien n'est copié ni décalé en VRAM.
 * **Slot = adresse** : 1 page ↔ 1 slab fixe → aucun allocateur, aucune fragmentation. La méta
-  `ivec4(pageXYZ, count)` permet au shader de rejeter un slot périmé.
-* **Budget par défaut** : 1024 slots × 64 Kio = **64 Mio** de splats + 2 Mio de cellules + 16 Kio de
+  `GsrPageMeta { ivec4(pageXYZ, count); uvec4 mask }` permet au shader de rejeter un slot périmé ;
+  `mask.xy` est le **masque de briques** : 1 bit par brique de 2×2×2 cellules (4³ voxels), 64 par page.
+* **Budget par défaut** : 1024 slots × 64 Kio = **64 Mio** de splats + 2 Mio de cellules + 32 Kio de
   méta. Réglable (`pagesX/Y/Z`, `levels`, `maxSplatsPerPage`).
 * Cibles écran du mode autonome : profondeur opaque en pleine résolution (4 o/pixel) + reflet,
   historique et distance en basse résolution (32 o/texel). En demi-résolution (défaut) : 12 o/pixel,
@@ -136,7 +137,8 @@ pendant la frame (redimensionnement), le reflet est sauté plutôt que faux.
 4. **Repli GSR** si confiance < 1 : `gsrTrace()` = cône-marche dans la clipmap. À chaque pas :
    * niveau = le plus fin dont le voxel (2^L) ≥ empreinte du cône **et** dont la fenêtre contient le
      point (`coneTan` = f(rugosité) : un reflet flou utilise d'office des splats plus gros → moins de pas) ;
-   * page absente/vide → saut d'une page entière ; sinon évaluation des splats de la cellule ;
+   * page absente/vide → saut d'une page entière ; brique vide (bit nul dans la méta, déjà lue) →
+     saut de 4³ voxels sans lire `cells[]` ; sinon évaluation des splats de la cellule ;
    * **intégrale analytique de la gaussienne le long du rayon** (pas de rastérisation, pas de tri) :
      `t* = −dᵀΣ⁻¹o / dᵀΣ⁻¹d`, `m² = oᵀΣ⁻¹o − (dᵀΣ⁻¹o)²/dᵀΣ⁻¹d`, `α = op·min(1, 1,6·e^(−m²/2))`
      (noyau « à sommet plat » : un mur pavé de surfels est réellement opaque) ;
@@ -183,7 +185,7 @@ linéaire, écriture `rgba8` dans le framebuffer principal **avant** la main et 
 
 ## 6. État et feuille de route
 
-**Vérifié** : tout `dev.gsr.core` compile et passe 27 vérifications (`CoreSelfTest`, dont les stats et la file de captures) : format std430, clé de
+**Vérifié** : tout `dev.gsr.core` compile et passe 30 vérifications (`CoreSelfTest`, dont les stats, la file de captures et le masque de briques) : format std430, clé de
 section signée, budget et tri par cellule, résumés, et — via `CpuReferenceTracer`, miroir ligne à ligne
 de `gsrTrace()` sur les mêmes octets — impacts au sol (L0), sur un pilier hors fenêtre L0 (trouvé en
 L1), dans l'eau translucide, en cône rugueux, après destruction de blocs et après recentrage toroïdal.
@@ -243,7 +245,13 @@ représentant dans la passe reflet et le relire, au lieu de le recalculer.
 
 Prochaines étapes, par ordre de rentabilité :
 1. ~~Reflet en **demi-résolution** + upsampling guidé par la profondeur~~ (fait : 3,04 → 1,24 ms).
-2. **Masque d'occupation par page** (512 bits) pour sauter les cellules vides sans lire `cells[]`.
+2. ~~**Masque d'occupation par page**~~ (fait, 2026-10-13). Choix : 64 bits par **brique** de 2³
+   cellules, rangés dans la méta, plutôt que 512 bits par cellule. Un masque par cellule ne ferait
+   qu'échanger la lecture de `cells[]` contre une autre lecture de même coût, sans réduire le nombre de
+   pas. La méta, elle, est déjà lue à chaque pas, et une brique vide se franchit en un pas au lieu de
+   2 à 4. Test CPU : rayon rasant à 4 blocs du sol, 6 pas sur 20 blocs au lieu de ≥ 10.
+   Vérifié en jeu : les shaders compilent sur AMD et le monde charge sans exception.
+   **Temps GPU et rendu à l'écran : pas encore mesurés**.
 3. Albédo depuis la **moyenne réelle des sprites** de l'atlas (au lieu de `MapColor`), teinte de biome.
 4. Mode autonome : le masque par profondeur (passe 0) ne distingue pas l'eau du verre teinté ni de la
    glace ; un vrai ID matériau demanderait un mixin sur le shader de terrain translucide, ou de le

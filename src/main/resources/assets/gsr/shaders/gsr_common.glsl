@@ -40,13 +40,18 @@ struct GsrFrame {
     vec4  blockLight;                  // rgb, w force d'émission
 };
 
+struct GsrPageMeta {
+    ivec4 page;        // xyz coord. de page, w nombre de splats
+    uvec4 mask;        // xy masque 64 bits des briques (2³ cellules = 4³ voxels) non vides, zw réservés
+};
+
 struct GsrSplat {
     vec4  posSigmaT;   // xyz relatif à l'origine de la page (blocs), w = σ tangentiel
     uvec4 data;        // x albédo 0xAARRGGBB | y normale(16) lumière(8) émission(4) niveau(2) | z bits(σ normal) | w réservé
 };
 
 layout(std430, binding = GSR_BINDING_FRAME)  readonly buffer GsrFrameBuffer { GsrFrame gsrFrame; };
-layout(std430, binding = GSR_BINDING_META)   readonly buffer GsrMetaBuffer  { ivec4    gsrPageMeta[]; };
+layout(std430, binding = GSR_BINDING_META)   readonly buffer GsrMetaBuffer  { GsrPageMeta gsrPageMeta[]; };
 layout(std430, binding = GSR_BINDING_CELLS)  readonly buffer GsrCellBuffer  { uint     gsrCells[]; };
 layout(std430, binding = GSR_BINDING_SPLATS) readonly buffer GsrSplatBuffer { GsrSplat gsrSplats[]; };
 
@@ -126,7 +131,8 @@ struct GsrHit {
  *
  * À chaque pas : niveau L = le plus fin dont le voxel (2^L) couvre l'empreinte du cône ET dont
  * la fenêtre contient le point. On évalue les splats de la cellule courante, puis on saute à la
- * sortie de la cellule (ou de toute la page si elle est vide / pas encore construite).
+ * sortie de la cellule, de la brique 4³ si son bit de masque est nul (sans lire gsrCells), ou de
+ * toute la page si elle est vide / pas encore construite.
  *
  * Évaluation analytique d'une gaussienne 3D le long du rayon, Σ⁻¹ = a·I + b·nnᵀ
  * (a = 1/σt², b = 1/σn² − 1/σt²) :
@@ -161,19 +167,24 @@ GsrHit gsrTrace(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float c
         if (!covered) break;                   // sorti de la clipmap -> le ciel prend le relais
 
         int   slot = gsrSlotIndex(L, page);
-        ivec4 meta = gsrPageMeta[slot];
+        GsrPageMeta meta = gsrPageMeta[slot];
         int   vs   = 1 << L;
-        bool  valid = all(equal(meta.xyz, page)) && meta.w > 0;
+        bool  valid = all(equal(meta.page.xyz, page)) && meta.page.w > 0;
         ivec3 cell  = (voxel & 15) >> 1;
+        ivec3 brick = cell >> 1;
+        int   bi    = brick.x + 4 * (brick.y + 4 * brick.z);
+        uint  bits  = bi < 32 ? meta.mask.x : meta.mask.y;
+        bool  occupied = valid && ((bits >> uint(bi & 31)) & 1u) != 0u;
 
-        ivec3 boxMin = valid ? (page * 16 + cell * 2) * vs : page * 16 * vs;
-        float boxSize = float(valid ? 2 * vs : 16 * vs);
+        // Boîte à franchir : cellule (brique occupée), brique vide (4³ voxels) ou page entière.
+        ivec3 boxMin = occupied ? (page * 16 + cell * 2) * vs : valid ? (page * 16 + brick * 4) * vs : page * 16 * vs;
+        float boxSize = float(occupied ? 2 * vs : valid ? 4 * vs : 16 * vs);
         vec3  bmin = gsrToRel(boxMin);
         vec3  t0 = (bmin - ro) * invD, t1 = (bmin + boxSize - ro) * invD;
         vec3  tf = max(t0, t1);
         float tExit = min(min(tf.x, tf.y), tf.z);
 
-        if (valid) {
+        if (occupied) {
             uint c = gsrCells[uint(slot) * 512u + uint(cell.x + 8 * (cell.y + 8 * cell.z))];
             uint off = c & 0xFFFFu, count = c >> 16u;
             if (count > 0u) {
