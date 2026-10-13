@@ -7,6 +7,7 @@ group = 'dev.gsr'
 
 repositories {
     maven { url = 'https://api.modrinth.com/maven' }   // Iris (API only, optional)
+    maven { url = 'https://maven.terraformersmc.com/releases' }   // Mod Menu (API only, optional)
     mavenCentral()
 }
 
@@ -17,6 +18,8 @@ dependencies {
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
     // Iris: compile-time only, loaded dynamically via IrisCompat
     modCompileOnly "maven.modrinth:iris:${project.iris_version}"
+    // Mod Menu: "Configure" button -> GsrOptionsScreen (entrypoint only loaded when Mod Menu is present)
+    modCompileOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
     // Compatibility: ./gradlew runClient -PwithSodium or -PwithIris (never bundled into the jar)
     if (project.hasProperty("withSodium") || project.hasProperty("withIris")) modLocalRuntime "maven.modrinth:sodium:${project.sodium_version}"
     if (project.hasProperty("withIris")) {
@@ -48,6 +51,7 @@ tasks.named('runClient', JavaExec) {
     if (project.hasProperty('gsrBursts')) systemProperty 'gsr.autoshotBursts', project.property('gsrBursts')
     if (project.hasProperty('gsrVideo')) systemProperty 'gsr.autoshotVideo', project.property('gsrVideo')
     if (project.hasProperty('gsrBench')) systemProperty 'gsr.benchRepeat', project.property('gsrBench')
+    if (project.hasProperty('gsrUiTest')) systemProperty 'gsr.uiTest', project.property('gsrUiTest')
 }
 
 processResources {

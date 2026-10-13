@@ -9,6 +9,9 @@ import dev.gsr.core.GsrLayout;
 import dev.gsr.mc.BlockMaterialTable;
 import dev.gsr.mc.McSnapshotSource;
 import dev.gsr.render.GsrRenderer;
+import dev.gsr.ui.GsrKeys;
+import dev.gsr.ui.GsrOptionsScreen;
+import dev.gsr.ui.GsrStatsOverlay;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
@@ -18,6 +21,9 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
+import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
+import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.fabricmc.fabric.api.resource.ResourceManagerHelper;
 import net.fabricmc.fabric.api.resource.ResourceReloadListenerKeys;
 import net.fabricmc.fabric.api.resource.SimpleSynchronousResourceReloadListener;
@@ -25,6 +31,11 @@ import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.color.world.BiomeColors;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.screen.option.OptionsScreen;
+import net.minecraft.client.gui.screen.option.VideoOptionsScreen;
+import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.gui.widget.OptionListWidget;
 import net.minecraft.client.util.ScreenshotRecorder;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.resource.ResourceManager;
@@ -33,6 +44,7 @@ import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.Util;
 import net.minecraft.util.math.Vec3d;
+import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -58,7 +70,12 @@ public final class GsrClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         ClientTickEvents.END_CLIENT_TICK.register(GsrClient::tick);
+        GsrKeys.register();
+        ClientTickEvents.END_CLIENT_TICK.register(GsrKeys::tick);
+        HudRenderCallback.EVENT.register(GsrStatsOverlay::render);
+        ScreenEvents.AFTER_INIT.register(GsrClient::addSettingsButton);
         if (AUTOSHOT != null) ClientTickEvents.END_CLIENT_TICK.register(GsrClient::autoShot);
+        if (UI_TEST != null) ClientTickEvents.END_CLIENT_TICK.register(GsrClient::uiTest);
 
         ClientChunkEvents.CHUNK_LOAD.register((world, chunk) -> {
             ensureWorld(world);
@@ -98,15 +115,15 @@ public final class GsrClient implements ClientModInitializer {
                         }))
                         // /gsr scale 1|2 : resolution of the reflection + temporal passes (before/after measurements)
                         .then(ClientCommandManager.literal("scale")
-                                .then(ClientCommandManager.argument("factor", IntegerArgumentType.integer(1, 2)).executes(c -> {
+                                .then(ClientCommandManager.argument("factor", IntegerArgumentType.integer(1, GsrConfig.MAX_RESOLUTION_SCALE)).executes(c -> {
                                     CONFIG.standaloneResolutionScale = IntegerArgumentType.getInteger(c, "factor");
                                     c.getSource().sendFeedback(Text.literal("GSR: reflection at 1/" + CONFIG.standaloneResolutionScale + " resolution"));
                                     return 1;
                                 })))
-                        // /gsr debug normal|ssr|gsr|raw|hit|refl : isolates the reflection source; raw = GSR without Fresnel, hit = T / distance / level in r / g / b, refl = hybrid reflection without Fresnel
+                        // /gsr debug normal|ssr|gsr|raw|hit|refl|cost : isolates the reflection source; raw = GSR without Fresnel, hit = T / distance / level in r / g / b, refl = hybrid reflection without Fresnel
                         .then(ClientCommandManager.literal("debug")
                                 .then(debugView("normal", 0)).then(debugView("ssr", 1)).then(debugView("gsr", 2))
-                                .then(debugView("raw", 3)).then(debugView("hit", 4)).then(debugView("refl", 5)))
+                                .then(debugView("raw", 3)).then(debugView("hit", 4)).then(debugView("refl", 5)).then(debugView("cost", 6)))
                         // /gsr bricks on|off : brick mask (before/after measurement at the same spot)
                         .then(ClientCommandManager.literal("bricks")
                                 .then(brickToggle("on", true)).then(brickToggle("off", false)))));
@@ -276,11 +293,48 @@ public final class GsrClient implements ClientModInitializer {
         List<String> w = List.of(name.split("[+]"));
         CONFIG.standaloneEnabled = !w.contains("off");
         CONFIG.brickMask = !w.contains("nobricks");
-        CONFIG.standaloneResolutionScale = w.contains("scale1") ? 1 : 2;
+        CONFIG.standaloneResolutionScale = w.contains("scale1") ? 1 : w.contains("scale3") ? 3 : w.contains("scale4") ? 4 : 2;
         CONFIG.debugView = w.contains("gsronly") ? 2 : w.contains("ssronly") ? 1 : w.contains("cost") ? 6 : w.contains("refl") ? 5 : 0;
         if (baseRoughness < 0f) baseRoughness = CONFIG.standaloneRoughness;
         CONFIG.standaloneRoughness = w.contains("mirror") ? 0f : baseRoughness;
     }
+
+    /**
+     * Development: -Dgsr.uiTest=<prefix> (gradle -PgsrUiTest=<prefix>) scripts the settings UI with no
+     * intervention: Video Settings scrolled to the GSR entry, the GSR screen, then the keys (F9 overlay,
+     * F8 resolution 3 and 4, F7 cost view), one screenshot each in run/screenshots/<prefix>_ui_*.png.
+     * Ends with the resolution back to 2 and the debug view off.
+     */
+    private static final String UI_TEST = System.getProperty("gsr.uiTest");
+    private static int uiTicks;
+
+    private static void uiTest(MinecraftClient client) {
+        if (client.world == null || client.player == null) return;
+        client.options.pauseOnLostFocus = false;
+        if (client.currentScreen == null && client.mouse.isCursorLocked()) client.mouse.unlockCursor();
+        int t = ++uiTicks;
+        if (t == 100) for (String cmd : List.of("gamemode spectator", "tp @s 130.13 62.68 113.65 -119.4 15.3")) client.player.networkHandler.sendChatCommand(cmd);
+        if (t == 300) client.setScreen(new VideoOptionsScreen(null, client, client.options));
+        if (t == 310 && client.currentScreen != null)
+            for (var child : client.currentScreen.children()) if (child instanceof OptionListWidget list) list.setScrollAmount(list.getMaxScroll());
+        if (t == 330) saveShot(client, UI_TEST + "_ui_video");
+        if (t == 340) client.setScreen(new GsrOptionsScreen(null));
+        if (t == 370) saveShot(client, UI_TEST + "_ui_gsr");
+        if (t == 380) { client.setScreen(null); press(GLFW.GLFW_KEY_F9); }
+        if (t == 420) saveShot(client, UI_TEST + "_ui_overlay");
+        if (t == 430 || t == 510 || t == 590 || t == 600) press(GLFW.GLFW_KEY_F8);   // 2 -> 3 -> 4 -> 1 -> 2
+        if (t == 500) saveShot(client, UI_TEST + "_ui_scale3");
+        if (t == 580) saveShot(client, UI_TEST + "_ui_scale4");
+        if (t >= 610 && t < 616) press(GLFW.GLFW_KEY_F7);   // normal -> ... -> cost
+        if (t == 660) saveShot(client, UI_TEST + "_ui_cost");
+        if (t == 670) { press(GLFW.GLFW_KEY_F7); press(GLFW.GLFW_KEY_F9); }
+        if (t == 700) {
+            saveShot(client, UI_TEST + "_ui_final");
+            LOG.info("GSR ui test done: scale {}, debug view {}, overlay {}", CONFIG.standaloneResolutionScale, CONFIG.debugView, CONFIG.statsOverlay);
+        }
+    }
+
+    private static void press(int glfwKey) { net.minecraft.client.option.KeyBinding.onKeyPressed(net.minecraft.client.util.InputUtil.fromKeyCode(glfwKey, 0)); }
 
     private static void saveShot(MinecraftClient client, String name) {
         ScreenshotRecorder.saveScreenshot(client.runDirectory, name + ".png",
@@ -304,10 +358,12 @@ public final class GsrClient implements ClientModInitializer {
     }
 
     /** Contents of /gsr stats (client thread). */
-    private static List<String> statsLines() {
+    public static List<String> statsLines() {
         List<String> out = new ArrayList<>();
         boolean iris = IrisCompat.isShaderPackInUse();
-        out.add("§6GSR§r — mode " + (iris ? "service (Iris shaderpack)" : CONFIG.standaloneEnabled ? "standalone" : "inactive"));
+        out.add("§6GSR§r — mode " + (iris ? "service (Iris shaderpack)" : CONFIG.standaloneEnabled ? "standalone" : "inactive")
+                + ", reflection 1/" + CONFIG.standaloneResolutionScale + ", debug view " + GsrConfig.DEBUG_VIEWS[CONFIG.debugView]
+                + (CONFIG.brickMask ? "" : ", brick mask off"));
         if (manager == null) { out.add("No world loaded"); return out; }
         GaussianChunkManager.Stats s = manager.stats();
         for (int L = 0; L < s.pages().length; L++) {
@@ -329,6 +385,28 @@ public final class GsrClient implements ClientModInitializer {
                     materials.albedo(id, GsrLayout.FACE_UP) & 0xFFFFFF));
         }
         return out;
+    }
+
+    /** Saves the settings changed in game (options screen, keys) to config/gsr.json. */
+    public static void saveConfig() { GsrConfigFile.saveRuntime(CONFIG_FILE, CONFIG); }
+
+    /**
+     * "GSR Reflections..." entry at the end of Video Settings (Fabric screen events, no mixin). Sodium replaces
+     * that screen with its own: then a button is added to the top-left corner of the Options screen instead.
+     */
+    private static void addSettingsButton(MinecraftClient client, Screen screen, int width, int height) {
+        Text label = Text.translatable("gsr.options.button");
+        if (screen instanceof VideoOptionsScreen) {
+            for (var child : screen.children()) {
+                if (child instanceof OptionListWidget list) {
+                    list.addWidgetEntry(ButtonWidget.builder(label, b -> client.setScreen(new GsrOptionsScreen(screen))).width(310).build(), null);
+                    return;
+                }
+            }
+        } else if (screen instanceof OptionsScreen && FabricLoader.getInstance().isModLoaded("sodium")) {
+            Screens.getButtons(screen).add(ButtonWidget.builder(label, b -> client.setScreen(new GsrOptionsScreen(screen)))
+                    .dimensions(6, 6, 100, 20).build());
+        }
     }
 
     private static boolean standaloneActive() {

@@ -109,7 +109,7 @@ public final class CoreSelfTest {
             bad.standaloneResolutionScale = 7; bad.capturesPerTick = 0; bad.maxTraceDistance = Float.NaN;
             bad.validate();
             check(bad.levels == GsrLayout.MAX_LEVELS && bad.pagesY == 2 && bad.baseOpacity == 0f && bad.sigmaTangent > 0f
-                    && bad.standaloneResolutionScale == 2 && bad.capturesPerTick == 1 && bad.maxTraceDistance > 0f,
+                    && bad.standaloneResolutionScale == GsrConfig.MAX_RESOLUTION_SCALE && bad.capturesPerTick == 1 && bad.maxTraceDistance > 0f,
                     "validate() clamps out-of-range values");
             GsrConfig live = new GsrConfig(), file = new GsrConfig();
             file.standaloneStrength = 0.5f;

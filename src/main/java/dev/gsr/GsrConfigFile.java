@@ -25,6 +25,27 @@ public final class GsrConfigFile {
     private GsrConfigFile() {}
 
     public static GsrConfig load(Path file) {
+        GsrConfig cfg = read(file);
+        if (cfg == null) return safeValidate(new GsrConfig());
+        write(file, cfg);
+        GsrClient.LOG.info("GSR: configuration read from {}", file);
+        return cfg;
+    }
+
+    /**
+     * Saves the settings changed in game (options screen, keys). Only the fields that can change during
+     * a session are taken from {@code live}: structural fields edited in the file since startup
+     * (levels, pages...) are kept for the next startup. An unreadable file is not overwritten.
+     */
+    public static void saveRuntime(Path file, GsrConfig live) {
+        GsrConfig cfg = read(file);
+        if (cfg == null) return;
+        cfg.copyRuntimeFrom(live);
+        write(file, cfg);
+    }
+
+    /** Validated content of the file, defaults if absent, null if unreadable. */
+    private static GsrConfig read(Path file) {
         GsrConfig cfg = new GsrConfig();
         if (Files.isRegularFile(file)) {
             try {
@@ -32,18 +53,19 @@ public final class GsrConfigFile {
                 cfg = GSON.fromJson(json, GsrConfig.class);
             } catch (Exception e) {
                 GsrClient.LOG.error("GSR: {} unreadable ({}), default values used, file kept", file, e.toString());
-                return safeValidate(new GsrConfig());
+                return null;
             }
         }
-        cfg = safeValidate(cfg);
+        return safeValidate(cfg);
+    }
+
+    private static void write(Path file, GsrConfig cfg) {
         try {
             Files.createDirectories(file.getParent());
             Files.writeString(file, GSON.toJson(cfg), StandardCharsets.UTF_8);
         } catch (IOException e) {
             GsrClient.LOG.warn("GSR: unable to write {}: {}", file, e.toString());
         }
-        GsrClient.LOG.info("GSR: configuration read from {}", file);
-        return cfg;
     }
 
     private static GsrConfig safeValidate(GsrConfig cfg) {

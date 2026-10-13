@@ -26,7 +26,7 @@ describes the "service" mode for shaderpacks.
 | `src/main/java/dev/gsr/mixin/` | `ClientWorldMixin` (the only mixin) |
 | `src/main/java/dev/gsr/compat/` | `IrisCompat` (lazy loading) |
 | `src/main/resources/assets/gsr/shaders/` | `gsr_common.glsl`, `gsr_screen.glsl`, `gsr_depthcopy.comp`, `gsr_reflect.comp`, `gsr_temporal.comp`, `gsr_composite.comp` |
-| `src/test/java/dev/gsr/core/CoreSelfTest.java` | Core tests (42 checks) |
+| `src/test/java/dev/gsr/core/CoreSelfTest.java` | Core tests (43 checks) |
 
 Target: **Minecraft 1.21.1, Yarn, Fabric Loader 0.16+, Fabric API, Java 21**. Versions in
 `gradle.properties`.

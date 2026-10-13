@@ -9,7 +9,8 @@
   "contributors": ["Garloulou (original idea)"],
   "environment": "client",
   "entrypoints": {
-    "client": ["dev.gsr.GsrClient"]
+    "client": ["dev.gsr.GsrClient"],
+    "modmenu": ["dev.gsr.compat.ModMenuCompat"]
   },
   "mixins": ["gsr.mixins.json"],
   "depends": {
@@ -20,6 +21,7 @@
   },
   "suggests": {
     "sodium": "*",
+    "modmenu": "*",
     "iris": "*"
   }
 }

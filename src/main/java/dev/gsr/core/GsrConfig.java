@@ -44,16 +44,26 @@ public final class GsrConfig {
      */
     public float standaloneFloorStrength = 0.0f;
     /**
-     * Resolution reduction of the reflection + temporal passes (1 = full, 2 = half resolution: 1/4 of the pixels).
+     * Resolution reduction of the reflection + temporal passes (1 = full, 2 = half resolution: 1/4 of the pixels,
+     * 3 = third, 4 = quarter: faster, blurrier).
      * Compositing stays at full resolution with depth-guided upsampling.
      */
     public int standaloneResolutionScale = 2;
     /** Max distance (blocks) of a GSR ray. */
     public float maxTraceDistance = 384f;
 
-    // ---- Debug (not persisted, /gsr debug and /gsr bricks) ----
-    /** 0 = normal, 1 = SSR only (sky fallback, no GSR), 2 = GSR only (no SSR). */
+    /** Largest standaloneResolutionScale (the representative pixel index is stored on 8 bits: scale² ≤ 256). */
+    public static final int MAX_RESOLUTION_SCALE = 4;
+
+    // ---- Debug (not persisted: options screen, keys, /gsr debug and /gsr bricks) ----
+    /**
+     * Index into DEBUG_VIEWS: 0 = normal, 1 = SSR only (sky fallback, no GSR), 2 = GSR only (no SSR),
+     * 3 = raw GSR (no Fresnel), 4 = GSR hit codes, 5 = hybrid reflection without Fresnel, 6 = GSR cost (steps / splats).
+     */
     public transient int debugView = 0;
+    public static final String[] DEBUG_VIEWS = {"normal", "ssr", "gsr", "raw", "hit", "refl", "cost"};
+    /** In-game statistics overlay (GPU time per pass, pages, queues). */
+    public transient boolean statsOverlay = false;
     /** False = cell-by-cell traversal (frame.iparams.y bit 0), to measure the gain of the mask. */
     public transient boolean brickMask = true;
 
@@ -83,7 +93,7 @@ public final class GsrConfig {
         standaloneRoughness = clampF(standaloneRoughness, 0f, 1f);
         standaloneStrength = clampF(standaloneStrength, 0f, 4f);
         standaloneFloorStrength = clampF(standaloneFloorStrength, 0f, 4f);
-        standaloneResolutionScale = Math.max(1, Math.min(2, standaloneResolutionScale));
+        standaloneResolutionScale = Math.max(1, Math.min(MAX_RESOLUTION_SCALE, standaloneResolutionScale));
         if (!(maxTraceDistance > 0f)) maxTraceDistance = 384f;
         return this;
     }

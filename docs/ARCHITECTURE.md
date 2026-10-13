@@ -37,6 +37,7 @@ as a last resort. No hardware ray tracing: OpenGL 4.3 only (compute + SSBO).
 
 ### Fabric integration points — and why these ones
 
+* **Settings UI**: Fabric `ScreenEvents`, `KeyBindingHelper`, `HudRenderCallback` and an optional Mod Menu entrypoint: no mixin (see §6, 2026-10-14).
 * **`ClientWorldMixin`** (`updateListeners`, `scheduleBlockRenders`): the only mixin. We do **not**
   intercept the `ChunkBuilder`: Sodium replaces it entirely (and Iris builds on Sodium). `ClientWorld`
   is touched by neither → a single code base for vanilla / Sodium / Iris.
@@ -106,7 +107,7 @@ triggers no rebuild.
   history and distance at low resolution (32 B/texel). At half resolution (default): 12 B/pixel,
   ≈ 40 MiB at 2560×1369 (computed; 120 MiB measured at full resolution).
 
-### Half resolution (`standaloneResolutionScale`, `/gsr scale 1|2`)
+### Reduced resolution (`standaloneResolutionScale`, 1 to 4: options screen, F8, `/gsr scale`)
 Passes 1 and 2 work on a grid ÷`scale`. Each texel picks a **representative pixel**
 in its `scale²` block: the first one, in a fixed order, that carries a reflection (`gsrRepresentative`).
 A block straddling a water edge therefore keeps a water sample, and the choice is deterministic:
@@ -187,7 +188,7 @@ linear, `rgba8` written into the main framebuffer **before** the hand and the HU
 
 ## 6. State and roadmap
 
-**Verified**: all of `dev.gsr.core` compiles and passes 42 checks (`CoreSelfTest`, including stats, the capture queue and the brick mask): std430 format, signed section
+**Verified**: all of `dev.gsr.core` compiles and passes 43 checks (`CoreSelfTest`, including stats, the capture queue, the brick mask and the octant skip): std430 format, signed section
 key, budget and per-cell sort, summaries, and — via `CpuReferenceTracer`, the line-by-line mirror
 of `gsrTrace()` on the same bytes — hits on the ground (L0), on a pillar outside the L0 window (found in
 L1), in translucent water, in a rough cone, after block destruction and after toroidal recentering.
@@ -394,6 +395,46 @@ the missing fields and the values clamped by `GsrConfig#validate()`; an unreadab
 kept and the default values used. `/gsr reload` applies the rendering and budget fields live;
 levels, pages, splats/page, SSBO binding point and threads at the next startup
 (`copyRuntimeFrom` reports it). σ and opacity only apply to regenerated pages.
+
+**Faster reflection pass (2026-10-14)**. Measurement method changed: with vsync the GPU is mostly idle
+and down-clocks, so sub-millisecond `GL_TIME_ELAPSED` values varied by ±0.05 ms between runs.
+`-PgsrBench=N` dispatches the reflection pass N times per frame and divides its time by N (GPU kept at its
+working clock, ±0.003 ms). `run/devtools/perf.sh` (not versioned) replays the reference spot at 2560×1369 and
+logs the time of each burst configuration (`GSR autoshot gpu [...]`). Reflection pass, bench ×16:
+
+| Step | SSR only | default (SSR → GSR) | GSR only |
+|---|---|---|---|
+| before | 0.222 ms | 0.458 ms | — |
+| SSR depth reads batched by 4 | 0.200 ms | 0.427 ms | — |
+| + empty octants skipped | 0.200 ms | **0.394 ms** | 0.305 ms |
+
+* *Where the time goes*: the new `cost` debug view (r = GSR steps / 64, g = splats read / 128, b = back-facing
+  splats / 128) showed that rays reflecting the sky cost the most: 32 to 64+ steps, few splats. They cross
+  pages that are almost all non-empty (L1: 253/256) in 4-voxel brick steps.
+* *Octants*: the meta's 64-bit brick mask also gives the occupancy of the 8 octants of a page (2³ bricks =
+  8³ voxels: bits `0x00330033 << (2·ox + 8·oy)` of the `oz` word). An empty octant is crossed in one step, with
+  no change to the GPU format. Mirrored in `CpuReferenceTracer`. Test: 20 blocks of empty octants in 3 steps
+  (bricks only: 6). The 4000-ray random comparison with the cell-by-cell traversal is unchanged (1/4000).
+* *SSR*: the depths of 4 consecutive steps are read together, then tested in order: same samples, same result.
+* Tried without gain (reverted): reading the cell entry at the same time as the page meta (0.436 ms); stopping
+  upward rays above the highest terrain (the steps are spent below it); halving the SSR step count only
+  saves 20 % of SSR, and removing the GSR code from the shader does not speed up SSR (no occupancy limit).
+* A coarser level cannot prove a finer one empty (L1+ voxels are majority votes), so empty space is not
+  skipped across levels.
+
+Resolution scales 3 and 4 added (representative pixel index ≤ 15 on the R8UI target). Reflection pass, bench ×16:
+full 1.448 ms, half 0.391 ms, third 0.193 ms, quarter 0.139 ms. Quarter resolution checked on a still image only
+(no visible blocks along the shores); stability in motion not measured.
+
+**Settings screen and keys (2026-10-14, verified in game with `-PgsrUiTest=<prefix>`, which scripts the screens and keys
+and takes a screenshot of each step)**. No mixin: Fabric `ScreenEvents.AFTER_INIT` appends a
+"GSR Reflections..." entry to the `OptionListWidget` of `VideoOptionsScreen` (with Sodium, which replaces that
+screen, a button in the top-left corner of `OptionsScreen`). `GsrOptionsScreen` extends `GameOptionsScreen` with
+`SimpleOption`s, so it looks like the vanilla screens. Mod Menu: optional `modmenu` entrypoint (`ModMenuCompat`,
+compile-only dependency). Keys (`KeyBindingHelper`): F6 on/off, F7/Shift+F7 debug view, F8/Shift+F8 resolution,
+F9 statistics overlay (`HudRenderCallback`, refreshed 4×/s, hidden with F3/F1), "open settings" unbound.
+Persistent changes go through `GsrConfigFile.saveRuntime`: the file is re-read and only the runtime fields are
+replaced, so structural fields edited by hand since startup are not overwritten. The `/gsr` commands remain.
 
 Next steps, in order of return on investment:
 1. ~~**Half-resolution** reflection + depth-guided upsampling~~ (done: 3.04 → 1.24 ms).

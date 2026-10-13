@@ -51,15 +51,37 @@ macOS is **not supported**, because it does not offer OpenGL 4.3.
 
 **OpenGL 4.3 is required.** If your machine does not provide it, the mod disables itself cleanly with a message in the log, without crashing. Detection also accepts drivers that report a 3.2 context but expose the required ARB extensions (the case with AMD drivers).
 
-## In-game commands and configuration
+## Settings, keys and commands
 
-All commands are client-side.
+**Settings screen**: *Options > Video Settings > GSR Reflections...* (at the bottom of the list), or the *Configure* button in Mod Menu. With Sodium, which replaces the Video Settings screen, a *GSR Reflections...* button appears in the top-left corner of the Options screen. Changes apply immediately and are saved to `config/gsr.json` when the screen closes.
+
+| Setting | Effect |
+|---|---|
+| Reflections | On / off |
+| Resolution | Full, Half (default), Third, Quarter: lower is faster and blurrier |
+| Strength | Reflections on water and translucent blocks (100% = physical Fresnel) |
+| Opaque Floors | Reflections on upward-facing opaque blocks (0% by default) |
+| Roughness | 0% = mirror (default); higher values blur the reflection |
+| Trace Distance | Maximum length of an off-screen reflection ray (64–512 blocks) |
+| Debug View, Statistics, Brick Mask | Diagnostics (not saved) |
+
+**Keys** (rebindable in *Options > Controls > Key Binds*, "GSR Reflections" category):
+
+| Key | Effect |
+|---|---|
+| F6 | Reflections on / off |
+| F7 | Next debug view (Shift+F7: previous) |
+| F8 | Next resolution (Shift+F8: previous) |
+| F9 | Statistics overlay (GPU time per pass, pages, queues) |
+| *unbound* | Open the GSR settings screen |
+
+**Commands** (client-side, mainly for scripts and diagnostics):
 
 | Command | Effect |
 |---|---|
 | `/gsr stats` | Pages and splats per level, queues, GPU time per pass, VRAM, biome tint |
-| `/gsr debug normal\|ssr\|gsr\|raw\|hit\|refl` | Diagnostic views: normals, SSR only, GSR only, GSR without Fresnel, hits, final hybrid reflection |
-| `/gsr scale 1\|2` | Reflection computation resolution: 1 = full, 2 = half resolution (default) |
+| `/gsr debug normal\|ssr\|gsr\|raw\|hit\|refl\|cost` | Diagnostic views: normal rendering, SSR only, GSR only, GSR without Fresnel, hits, final hybrid reflection, GSR cost (steps / splats per ray) |
+| `/gsr scale 1\|2\|3\|4` | Reflection resolution: 1 = full, 2 = half (default), 3 = third, 4 = quarter |
 | `/gsr bricks on\|off` | Enables or disables the per-brick occupancy mask (diagnostic) |
 | `/gsr reload` | Re-reads `config/gsr.json` |
 
@@ -73,9 +95,11 @@ All commands are client-side.
 |---|---|
 | Before optimization (full resolution) | ≈ 2.95 ms |
 | Half resolution (default) | ≈ 1.24 ms |
-| After brick mask and lightened temporal pass | **≈ 0.72 ms** |
+| After brick mask and lightened temporal pass | ≈ 0.72 ms |
+| After octant skipping and batched SSR reads (2026-10-14) | **≈ 0.65 ms** |
 
 - Screen targets go from 120 MiB (full resolution) to about 40 MiB (half resolution).
+- Reflection pass alone (2026-10-14, GPU kept at full clock): 1.45 ms at full resolution, 0.39 ms at half, 0.19 ms at a third, 0.14 ms at a quarter.
 - The Gaussian field takes about 64 MiB of VRAM by default (1024 pages).
 
 These figures come from a single machine. They say nothing about other GPUs.
@@ -84,7 +108,7 @@ These figures come from a single machine. They say nothing about other GPUs.
 
 ```bash
 ./gradlew build          # produces build/libs/gsr-<version>.jar
-./gradlew coreSelfTest   # core tests, without Minecraft (42 checks)
+./gradlew coreSelfTest   # core tests, without Minecraft (43 checks)
 ./gradlew runClient      # launches the game with the mod
 ./gradlew runClient -PwithSodium   # or -PwithIris, to test compatibility
 ./gradlew gsrTestPack    # assembles the test Iris pack in run/shaderpacks/GSR-TestPack
