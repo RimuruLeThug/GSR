@@ -51,6 +51,7 @@ tasks.named('runClient', JavaExec) {
     if (project.hasProperty('gsrBursts')) systemProperty 'gsr.autoshotBursts', project.property('gsrBursts')
     if (project.hasProperty('gsrVideo')) systemProperty 'gsr.autoshotVideo', project.property('gsrVideo')
     if (project.hasProperty('gsrBench')) systemProperty 'gsr.benchRepeat', project.property('gsrBench')
+    if (project.hasProperty('gsrBenchOverlap')) systemProperty 'gsr.benchOverlap', 'true'
     if (project.hasProperty('gsrUiTest')) systemProperty 'gsr.uiTest', project.property('gsrUiTest')
 }
 

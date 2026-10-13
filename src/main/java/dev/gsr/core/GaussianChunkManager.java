@@ -52,6 +52,8 @@ public final class GaussianChunkManager implements AutoCloseable {
     private final ConcurrentLinkedQueue<Long> summarized = new ConcurrentLinkedQueue<>();
     private final AtomicLong versions = new AtomicLong();
     private final AtomicInteger inFlight = new AtomicInteger();
+    /** CPU time spent in worker jobs (section summaries + splat generation), and job count. */
+    private final AtomicLong workerNanos = new AtomicLong(), workerJobs = new AtomicLong();
 
     // Main thread only
     @SuppressWarnings("unchecked")
@@ -64,6 +66,8 @@ public final class GaussianChunkManager implements AutoCloseable {
     /** Splats per GPU slot as uploaded (-1 = invalid slot). CPU mirror of the meta, for stats. */
     private final int[] slotSplats;
     private long totalUploads;
+    /** Client-thread cost of tick(): moving average and maximum since the last stats() call (ms). */
+    private double tickMsAvg, tickMsMax;
 
     public GaussianChunkManager(GsrConfig cfg, SectionSnapshotSource source) {
         this.cfg = cfg.validate();
@@ -128,6 +132,14 @@ public final class GaussianChunkManager implements AutoCloseable {
     // ------------------------------------------------------------------ Tick (main thread)
 
     public void tick(int playerBx, int playerBy, int playerBz, long nowMs) {
+        long t0 = System.nanoTime();
+        tickWork(playerBx, playerBy, playerBz, nowMs);
+        double ms = (System.nanoTime() - t0) / 1e6;
+        tickMsAvg = tickMsAvg * 0.95 + ms * 0.05;
+        tickMsMax = Math.max(tickMsMax, ms);
+    }
+
+    private void tickWork(int playerBx, int playerBy, int playerBz, long nowMs) {
         tickCount++;
         psx = playerBx >> 4; psy = playerBy >> 4; psz = playerBz >> 4;
 
@@ -210,6 +222,7 @@ public final class GaussianChunkManager implements AutoCloseable {
         final long ver = l0 != null ? bumpVersion(l0) : 0L;
         inFlight.incrementAndGet();
         workers.execute(() -> {
+            long j0 = System.nanoTime();
             try {
                 SectionSummary s = SectionSummary.build(src);
                 SectionSummary prev = summaries.put(key, s);
@@ -225,6 +238,8 @@ public final class GaussianChunkManager implements AutoCloseable {
             } catch (Throwable t) {
                 t.printStackTrace();
             } finally {
+                workerNanos.addAndGet(System.nanoTime() - j0);
+                workerJobs.incrementAndGet();
                 inFlight.decrementAndGet();
             }
         });
@@ -234,6 +249,7 @@ public final class GaussianChunkManager implements AutoCloseable {
         final long ver = bumpVersion(page);
         inFlight.incrementAndGet();
         workers.execute(() -> {
+            long j0 = System.nanoTime();
             try {
                 VoxelGrid g = VoxelGrid.fromSummaries(page,
                         (sx, sy, sz) -> summaries.get(GsrLayout.sectionKey(sx, sy, sz)));
@@ -241,6 +257,8 @@ public final class GaussianChunkManager implements AutoCloseable {
             } catch (Throwable t) {
                 t.printStackTrace();
             } finally {
+                workerNanos.addAndGet(System.nanoTime() - j0);
+                workerJobs.incrementAndGet();
                 inFlight.decrementAndGet();
             }
         });
@@ -272,10 +290,12 @@ public final class GaussianChunkManager implements AutoCloseable {
     /**
      * Snapshot for /gsr stats. Per level: valid pages on the GPU, of which non-empty, splats.
      * Queues: pending captures, coarse pages in debounce, worker tasks, ready pages not yet sent.
+     * CPU: client-thread tick() average and maximum since the previous call (ms), worker jobs and their total time.
      */
     public record Stats(int slotsPerLevel, int[] pages, int[] nonEmptyPages, long[] splats,
                         int captureQueue, int coarsePending, int inFlight, int readyQueue,
-                        int summaries, long totalUploads) {}
+                        int summaries, long totalUploads,
+                        double tickMsAvg, double tickMsMax, long workerJobs, double workerMs) {}
 
     public Stats stats() {
         int levels = clipmap.levels(), per = cfg.slotsPerLevel();
@@ -289,8 +309,11 @@ public final class GaussianChunkManager implements AutoCloseable {
             if (c > 0) nonEmpty[L]++;
             splats[L] += c;
         }
+        double max = tickMsMax;
+        tickMsMax = 0;
         return new Stats(per, pages, nonEmpty, splats, captureQueued.size(), coarseDue.size(),
-                inFlight.get(), ready.size(), summaries.size(), totalUploads);
+                inFlight.get(), ready.size(), summaries.size(), totalUploads,
+                tickMsAvg, max, workerJobs.get(), workerNanos.get() / 1e6);
     }
 
     @Override

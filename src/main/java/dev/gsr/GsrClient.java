@@ -372,6 +372,8 @@ public final class GsrClient implements ClientModInitializer {
         }
         out.add(String.format("Queues: captures %d, coarse %d, workers %d, ready %d; summaries %,d; uploads %,d",
                 s.captureQueue(), s.coarsePending(), s.inFlight(), s.readyQueue(), s.summaries(), s.totalUploads()));
+        out.add(String.format("CPU: tick %.2f ms avg, %.2f ms max; workers %d threads, %,d jobs, %.2f ms/job",
+                s.tickMsAvg(), s.tickMsMax(), CONFIG.workerThreads, s.workerJobs(), s.workerJobs() == 0 ? 0.0 : s.workerMs() / s.workerJobs()));
         RENDERER.appendStats(out, CONFIG, standaloneActive());
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player != null && materials != null && currentWorld != null) {
@@ -413,10 +415,19 @@ public final class GsrClient implements ClientModInitializer {
         return manager != null && CONFIG.standaloneEnabled && !IrisCompat.isShaderPackInUse();
     }
 
+    /** Time the world was entered, until the first complete clipmap build is logged (-1 = logged). */
+    private static long buildStartMs = -1;
+
     private static void tick(MinecraftClient client) {
         ensureWorld(client.world);
         if (manager != null && client.player != null) {
             manager.tick(client.player.getBlockX(), client.player.getBlockY(), client.player.getBlockZ(), Util.getMeasuringTimeMs());
+            if (buildStartMs >= 0 && manager.isIdle() && manager.stats().totalUploads() > 0) {
+                GaussianChunkManager.Stats s = manager.stats();
+                LOG.info("GSR: clipmap built in {} s ({} jobs, {} ms of worker CPU, {} worker threads)",
+                        String.format("%.1f", (Util.getMeasuringTimeMs() - buildStartMs) / 1000.0), s.workerJobs(), Math.round(s.workerMs()), CONFIG.workerThreads);
+                buildStartMs = -1;
+            }
         }
     }
 
@@ -431,6 +442,7 @@ public final class GsrClient implements ClientModInitializer {
         if (materials == null) materials = BlockMaterialTable.build();
         source = new McSnapshotSource(world, materials);
         manager = new GaussianChunkManager(CONFIG, source);
+        buildStartMs = Util.getMeasuringTimeMs();
     }
 
     /**

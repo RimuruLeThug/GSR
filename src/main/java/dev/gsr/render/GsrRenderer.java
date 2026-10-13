@@ -48,12 +48,17 @@ public final class GsrRenderer {
     static final int T_DEPTH = 0, T_REFLECT = 1, T_TEMPORAL = 2, T_COMPOSITE = 3;
     private static final String[] T_NAMES = {"depth copy", "reflection", "temporal", "composite"};
     /**
-     * Development (-Dgsr.benchRepeat=N, gradle -PgsrBench=N): the reflection pass is dispatched N times per
-     * frame and its time divided by N. Keeps the GPU at its working clock (with vsync it idles and
+     * Development (-Dgsr.benchRepeat=N, gradle -PgsrBench=N): the reflection, temporal and composite passes are
+     * dispatched N times per frame and their times divided by N. Keeps the GPU at its working clock (with vsync it idles and
      * down-clocks, making sub-millisecond measurements noisy). The repeats are separated by a barrier,
      * as the single pass is in a real frame.
      */
     private static final int BENCH_REPEAT = Math.max(1, Integer.getInteger("gsr.benchRepeat", 1));
+    /**
+     * -Dgsr.benchOverlap (gradle -PgsrBenchOverlap): no barrier between the repeats, the GPU overlaps them and
+     * the bench measures throughput — closer to a small GPU, where the pass is never latency-bound.
+     */
+    private static final boolean BENCH_OVERLAP = Boolean.getBoolean("gsr.benchOverlap");
     private GsrGpuTimer timer;
     private double uploadCpuMs;
     private int lastUploads;
@@ -216,11 +221,7 @@ public final class GsrRenderer {
             glBindImageTexture(0, targets.reflection, 0, false, 0, GL_WRITE_ONLY, GL_RGBA16F);
             glBindImageTexture(1, targets.representative, 0, false, 0, GL_WRITE_ONLY, GL_R8UI);
             timer.begin(T_REFLECT);
-            for (int r = 0; r < BENCH_REPEAT; r++) {
-                glDispatchCompute(lgx, lgy, 1);
-                // Without a barrier the driver overlaps the repeats, which hid ~1/3 of the real cost of one pass.
-                if (BENCH_REPEAT > 1) glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-            }
+            benchDispatch(lgx, lgy);
             timer.end(T_REFLECT);
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 
@@ -240,7 +241,7 @@ public final class GsrRenderer {
             glBindImageTexture(0, targets.history[cur], 0, false, 0, GL_WRITE_ONLY, GL_RGBA16F);
             glBindImageTexture(1, targets.distance[cur], 0, false, 0, GL_WRITE_ONLY, GL_R32F);
             timer.begin(T_TEMPORAL);
-            glDispatchCompute(lgx, lgy, 1);
+            benchDispatch(lgx, lgy);   // idempotent: same inputs, same output
             timer.end(T_TEMPORAL);
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 
@@ -251,8 +252,16 @@ public final class GsrRenderer {
             bindTex(0, depthTex);
             bindTex(2, targets.history[cur]);
             bindTex(4, targets.distance[cur]);
-            glBindImageTexture(0, fb.getColorAttachment(), 0, false, 0, GL_READ_WRITE, GL_RGBA8);
             timer.begin(T_COMPOSITE);
+            if (BENCH_REPEAT > 1) {   // not idempotent (blends into the scene): the extra repeats write a scratch image
+                if (benchScratch == 0 || benchScratchW != w || benchScratchH != h) {
+                    if (benchScratch != 0) glDeleteTextures(benchScratch);
+                    benchScratch = benchScratchTexture(w, h);
+                }
+                glBindImageTexture(0, benchScratch, 0, false, 0, GL_READ_WRITE, GL_RGBA8);
+                for (int r = 1; r < BENCH_REPEAT; r++) benchStep(gx, gy);
+            }
+            glBindImageTexture(0, fb.getColorAttachment(), 0, false, 0, GL_READ_WRITE, GL_RGBA8);
             glDispatchCompute(gx, gy, 1);
             timer.end(T_COMPOSITE);
             glMemoryBarrier(GL_FRAMEBUFFER_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
@@ -292,7 +301,7 @@ public final class GsrRenderer {
         StringBuilder line = new StringBuilder("GPU (avg):");
         double total = 0;
         for (int s = 0; s < T_NAMES.length; s++) {
-            double ms = timer.avgMs(s) / (s == T_REFLECT ? BENCH_REPEAT : 1);
+            double ms = timer.avgMs(s) / (s == T_DEPTH ? 1 : BENCH_REPEAT);
             total += ms;
             line.append(String.format(" %s %.3f ms,", T_NAMES[s], ms));
         }
@@ -303,6 +312,28 @@ public final class GsrRenderer {
     public void resetHistory() { prevCam = null; targets.historyValid = false; }
 
     // ------------------------------------------------------------------ helpers
+
+    /** Dispatch, repeated BENCH_REPEAT times in bench mode (the GPU timer divides by BENCH_REPEAT). */
+    private static void benchDispatch(int gx, int gy) {
+        for (int r = 0; r < BENCH_REPEAT; r++) benchStep(gx, gy);
+    }
+
+    private static void benchStep(int gx, int gy) {
+        glDispatchCompute(gx, gy, 1);
+        // Without a barrier the driver overlaps the repeats, which hid ~1/3 of the real cost of one pass.
+        if (BENCH_REPEAT > 1 && !BENCH_OVERLAP) glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+    }
+
+    /** Bench only: full-resolution RGBA8 target for the extra composite repeats (resized: recreated). */
+    private int benchScratch, benchScratchW, benchScratchH;
+
+    private int benchScratchTexture(int w, int h) {
+        benchScratchW = w; benchScratchH = h;
+        int t = glGenTextures();
+        glBindTexture(GL_TEXTURE_2D, t);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, w, h);
+        return t;
+    }
 
     private void setCommon(int p, Matrix4f proj, Matrix4f invProj, Matrix4f view, Matrix4f invView, int w, int h, GsrConfig cfg) {
         setMat(p, "uProj", proj); setMat(p, "uInvProj", invProj);
