@@ -40,8 +40,13 @@ void main() {
     vec2 AB = envBRDFApprox(NoV, rough);
     float spec = clamp((F0 * AB.x + AB.y) * mask, 0.0, 1.0);
 
+    // Compression douce des hautes lumières (le framebuffer est en 8 bits, sans tone mapping) :
+    // linéaire jusqu'à une luminance de 1, logarithmique au-delà -> plus de disque blanc saturé.
+    float lum = dot(refl.rgb, vec3(0.2126, 0.7152, 0.0722));
+    vec3 reflC = lum > 1.0 ? refl.rgb * ((1.0 + log(lum)) / lum) : refl.rgb;
+
     vec4 scene = imageLoad(uScene, px);
     vec3 sceneLin = pow(scene.rgb, vec3(2.2));
-    vec3 outLin = sceneLin * (1.0 - spec) + refl.rgb * spec;
+    vec3 outLin = sceneLin * (1.0 - spec) + reflC * spec;
     imageStore(uScene, px, vec4(pow(outLin, vec3(1.0 / 2.2)), scene.a));
 }

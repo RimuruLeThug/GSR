@@ -89,7 +89,9 @@ vec3 gsrSkyRadiance(vec3 dir) {
     float h = clamp(dir.y, 0.0, 1.0);
     vec3 sky = mix(gsrFrame.skyHorizon.rgb, gsrFrame.skyZenith.rgb, sqrt(h)) * gsrFrame.sunDir.w;
     float sd = max(dot(dir, gsrFrame.sunDir.xyz), 0.0);
-    sky += gsrFrame.sunColor.rgb * (pow(sd, 800.0) * 30.0 + pow(sd, 8.0) * 0.25) * gsrFrame.sunDir.w;
+    // Disque ~1° de demi-largeur, pic ≈ 8 × sunColor (l'ancien 800/×30 donnait un rond blanc aveuglant
+    // de ~2,4° une fois réfléchi par l'eau, vu en jeu) + halo discret.
+    sky += gsrFrame.sunColor.rgb * (pow(sd, 4000.0) * 8.0 + pow(sd, 16.0) * 0.12) * gsrFrame.sunDir.w;
     if (dir.y < 0.0) sky *= mix(1.0, 0.3, clamp(-dir.y * 4.0, 0.0, 1.0));
     return sky;
 }
