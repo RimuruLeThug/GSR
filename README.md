@@ -116,4 +116,6 @@ javac -d out src/main/java/dev/gsr/core/*.java src/test/java/dev/gsr/core/*.java
 
 All the code of this mod was written by Claude (Anthropic), an AI agent, under the direction and with the review of Rimuru, who tested it in game and validated each step. The original idea for GSR came from Garloulou.
 
-License: to be defined.
+## License
+
+GSR is released under the [MIT License](LICENSE): you may use, modify and redistribute the code freely, including in other projects, as long as you keep the copyright notice — i.e. credit the GSR project (https://github.com/RimuruLeThug/GSR).
