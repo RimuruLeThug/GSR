@@ -124,13 +124,13 @@ public final class GsrClient implements ClientModInitializer {
     /**
      * -Dgsr.autoshotCmds="locate biome minecraft:swamp;time set noon" : commandes envoyées 5 s après
      * l'entrée dans le monde (téléportation, heure, météo), avant les captures. Le résultat apparaît
-     * dans le log ([CHAT]). Ce qui suit un « | » est envoyé juste avant la première capture (ex. gsr stats).
+     * dans le log ([CHAT]). Ce qui suit un « | » est envoyé 13 s avant la première capture (ex. gsr stats : le chat a disparu).
      */
     private static final String AUTOSHOT_CMDS = System.getProperty("gsr.autoshotCmds");
 
     private static void autoShot(MinecraftClient client) {
         if (client.world == null || client.player == null) return;
-        if (AUTOSHOT_CMDS != null && (autoShotTicks == 100 || autoShotTicks == 880)) {
+        if (AUTOSHOT_CMDS != null && (autoShotTicks == 100 || autoShotTicks == 640)) {
             String[] parts = AUTOSHOT_CMDS.split("\\|", 2);
             String part = autoShotTicks == 100 ? parts[0] : parts.length > 1 ? parts[1] : "";
             for (String cmd : part.split(";"))
@@ -139,6 +139,7 @@ public final class GsrClient implements ClientModInitializer {
         // Vue i à 300 + 60·i ticks ; entre deux, 60 ticks pour que l'historique temporel se stabilise.
         int t = ++autoShotTicks - (AUTOSHOT_CMDS != null ? 900 : 300);   // téléportation : laisser générer
         if (t < 0) return;
+        if (client.currentScreen != null) client.setScreen(null);   // chat ou menu ouvert : masquerait l'eau
         if (t < 60 * AUTOSHOT_VIEWS.length) {
             if (t % 60 != 0) return;
             int i = t / 60;
