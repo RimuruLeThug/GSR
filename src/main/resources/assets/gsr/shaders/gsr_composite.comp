@@ -32,7 +32,7 @@ void main() {
     vec3 nV = gsrViewNormalFromDepth(uDepth, px, vp);
     vec3 N  = normalize(mat3(uInvView) * nV);
     float rough, mask;
-    gsrStandaloneMaterial(N, rough, mask);
+    gsrStandaloneMaterial(N, px, d, rough, mask);
     if (mask <= 0.001) return;
 
     float NoV = clamp(dot(nV, -normalize(vp)), 1e-3, 1.0);

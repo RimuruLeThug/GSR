@@ -34,13 +34,15 @@ import static org.lwjgl.opengl.GL43C.*;
  *  WorldRenderEvents.END   : mémorise les matrices pour la reprojection de la frame suivante.
  *
  * Hygiène d'état : Minecraft met en cache son état GL (GlStateManager). On relit et on restaure
- * exactement ce qu'on touche (programme, unité active, textures 0..4) pour que ce cache reste vrai.
+ * exactement ce qu'on touche (programme, unité active, textures 0..5) pour que ce cache reste vrai.
  */
 public final class GsrRenderer {
     private boolean initialized, failed;
     private GsrGpuResources gpu;
     private final GsrScreenTargets targets = new GsrScreenTargets();
-    private int progReflect, progTemporal, progComposite;
+    private int progDepthCopy, progReflect, progTemporal, progComposite;
+    /** Vrai si la profondeur opaque a été copiée pendant cette frame (sinon le masque serait faux). */
+    private boolean opaqueDepthCaptured;
     private final Map<Integer, Map<String, Integer>> uniformCache = new HashMap<>();
 
     private final GsrFrameData frame = new GsrFrameData();
@@ -62,6 +64,7 @@ public final class GsrRenderer {
         GsrClient.LOG.info("GSR : contexte {}", glInfo);
         try {
             gpu = new GsrGpuResources(cfg);
+            progDepthCopy = GsrShaderLoader.compileCompute("gsr_depthcopy.comp", cfg.ssboBindingBase);
             progReflect = GsrShaderLoader.compileCompute("gsr_reflect.comp", cfg.ssboBindingBase);
             progTemporal = GsrShaderLoader.compileCompute("gsr_temporal.comp", cfg.ssboBindingBase);
             progComposite = GsrShaderLoader.compileCompute("gsr_composite.comp", cfg.ssboBindingBase);
@@ -114,19 +117,66 @@ public final class GsrRenderer {
 
     // ------------------------------------------------------------------ mode autonome
 
+    /** Unités de texture touchées par les passes (0..5) : sauvegardées puis restaurées à l'identique. */
+    private static final int TEX_UNITS = 6;
+
+    private static int[] saveGlState() {
+        int[] s = new int[TEX_UNITS + 2];
+        s[0] = glGetInteger(GL_CURRENT_PROGRAM);
+        s[1] = glGetInteger(GL_ACTIVE_TEXTURE);
+        for (int i = 0; i < TEX_UNITS; i++) { glActiveTexture(GL_TEXTURE0 + i); s[2 + i] = glGetInteger(GL_TEXTURE_BINDING_2D); }
+        return s;
+    }
+
+    private static void restoreGlState(int[] s) {
+        glBindImageTexture(0, 0, 0, false, 0, GL_READ_ONLY, GL_RGBA8);
+        glBindImageTexture(1, 0, 0, false, 0, GL_READ_ONLY, GL_RGBA8);
+        for (int i = 0; i < TEX_UNITS; i++) { glActiveTexture(GL_TEXTURE0 + i); glBindTexture(GL_TEXTURE_2D, s[2 + i]); }
+        glActiveTexture(s[1]);
+        glUseProgram(s[0]);
+    }
+
+    /**
+     * Profondeur de la scène vue par les passes : en mode graphique « Fabuleux », l'eau est rendue dans
+     * un framebuffer translucide séparé, dont la profondeur part d'une copie de l'opaque.
+     */
+    private static int sceneDepthTexture(WorldRenderContext ctx, Framebuffer main) {
+        Framebuffer tr = ctx.worldRenderer().getTranslucentFramebuffer();
+        return tr != null ? tr.getDepthAttachment() : main.getDepthAttachment();
+    }
+
+    /** WorldRenderEvents.BEFORE_DEBUG_RENDER : la couche translucide n'est pas encore dessinée. */
+    public void captureOpaqueDepth(WorldRenderContext ctx) {
+        if (!initialized) return;
+        Framebuffer fb = MinecraftClient.getInstance().getFramebuffer();
+        int w = fb.textureWidth, h = fb.textureHeight;
+        int[] state = saveGlState();
+        try {
+            targets.ensureSize(w, h);
+            glUseProgram(progDepthCopy);
+            glUniform2f(loc(progDepthCopy, "uScreenSize"), w, h);
+            bindTex(0, fb.getDepthAttachment());
+            glBindImageTexture(0, targets.opaqueDepth, 0, false, 0, GL_WRITE_ONLY, GL_R32F);
+            glDispatchCompute((w + 7) / 8, (h + 7) / 8, 1);
+            glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+            opaqueDepthCaptured = true;
+        } finally {
+            restoreGlState(state);
+        }
+    }
+
     public void renderStandalone(WorldRenderContext ctx, GsrConfig cfg) {
         if (!initialized) return;
         Framebuffer fb = MinecraftClient.getInstance().getFramebuffer();
         int w = fb.textureWidth, h = fb.textureHeight;
+        // Sans profondeur opaque de CETTE frame, le masque eau/translucide serait faux : on saute.
+        if (!opaqueDepthCaptured || targets.width != w || targets.height != h) return;
+        opaqueDepthCaptured = false;
+        int depthTex = sceneDepthTexture(ctx, fb);
 
-        // --- sauvegarde de l'état GL touché ---
-        int prevProgram = glGetInteger(GL_CURRENT_PROGRAM);
-        int prevActive = glGetInteger(GL_ACTIVE_TEXTURE);
-        int[] prevTex = new int[5];
-        for (int i = 0; i < 5; i++) { glActiveTexture(GL_TEXTURE0 + i); prevTex[i] = glGetInteger(GL_TEXTURE_BINDING_2D); }
-
+        int[] state = saveGlState();
         try {
-            targets.ensureSize(w, h);
+            bindTex(5, targets.opaqueDepth);
             Matrix4f proj = new Matrix4f(ctx.projectionMatrix());
             Matrix4f view = new Matrix4f(ctx.positionMatrix());
             Matrix4f invProj = new Matrix4f(proj).invert();
@@ -138,7 +188,7 @@ public final class GsrRenderer {
             glUseProgram(progReflect);
             setCommon(progReflect, proj, invProj, view, invView, w, h, cfg);
             set1f(progReflect, "uMaxTrace", cfg.maxTraceDistance);
-            bindTex(0, fb.getDepthAttachment());
+            bindTex(0, depthTex);
             bindTex(1, fb.getColorAttachment());
             glBindImageTexture(0, targets.reflection, 0, false, 0, GL_WRITE_ONLY, GL_RGBA16F);
             glDispatchCompute(gx, gy, 1);
@@ -152,7 +202,7 @@ public final class GsrRenderer {
             Vec3d delta = prevCam == null ? Vec3d.ZERO : cam.subtract(prevCam);
             glUniform3f(loc(progTemporal, "uCamDelta"), (float) delta.x, (float) delta.y, (float) delta.z);
             glUniform1i(loc(progTemporal, "uHistoryValid"), targets.historyValid && prevCam != null ? 1 : 0);
-            bindTex(0, fb.getDepthAttachment());
+            bindTex(0, depthTex);
             bindTex(2, targets.reflection);
             bindTex(3, targets.history[prev]);
             bindTex(4, targets.distance[prev]);
@@ -164,7 +214,7 @@ public final class GsrRenderer {
             // 3) composition dans le framebuffer principal
             glUseProgram(progComposite);
             setCommon(progComposite, proj, invProj, view, invView, w, h, cfg);
-            bindTex(0, fb.getDepthAttachment());
+            bindTex(0, depthTex);
             bindTex(2, targets.history[cur]);
             glBindImageTexture(0, fb.getColorAttachment(), 0, false, 0, GL_READ_WRITE, GL_RGBA8);
             glDispatchCompute(gx, gy, 1);
@@ -172,11 +222,7 @@ public final class GsrRenderer {
 
             targets.swap();
         } finally {
-            glBindImageTexture(0, 0, 0, false, 0, GL_READ_ONLY, GL_RGBA8);
-            glBindImageTexture(1, 0, 0, false, 0, GL_READ_ONLY, GL_RGBA8);
-            for (int i = 0; i < 5; i++) { glActiveTexture(GL_TEXTURE0 + i); glBindTexture(GL_TEXTURE_2D, prevTex[i]); }
-            glActiveTexture(prevActive);
-            glUseProgram(prevProgram);
+            restoreGlState(state);
         }
     }
 
@@ -200,6 +246,7 @@ public final class GsrRenderer {
         glUniform1i(loc(p, "uFrame"), frameIndex);
         set1f(p, "uRoughness", cfg.standaloneRoughness);
         set1f(p, "uStrength", cfg.standaloneStrength);
+        set1f(p, "uFloorStrength", cfg.standaloneFloorStrength);
     }
 
     private static void bindTex(int unit, int tex) { glActiveTexture(GL_TEXTURE0 + unit); glBindTexture(GL_TEXTURE_2D, tex); }
@@ -220,7 +267,7 @@ public final class GsrRenderer {
         if (!initialized) return;
         gpu.close();
         targets.delete();
-        glDeleteProgram(progReflect); glDeleteProgram(progTemporal); glDeleteProgram(progComposite);
+        glDeleteProgram(progDepthCopy); glDeleteProgram(progReflect); glDeleteProgram(progTemporal); glDeleteProgram(progComposite);
         initialized = false;
     }
 }

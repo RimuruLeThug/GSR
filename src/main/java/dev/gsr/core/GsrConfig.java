@@ -36,6 +36,12 @@ public final class GsrConfig {
     public boolean standaloneEnabled = true;
     public float standaloneRoughness = 0.08f;
     public float standaloneStrength = 1.0f;
+    /**
+     * Force des reflets sur les sols OPAQUES orientés vers le haut (herbe, pierre...). L'eau et les
+     * translucides sont détectés par comparaison de profondeur et reflètent toujours à pleine force.
+     * 0 par défaut : un sol mat en miroir donne un voile laiteux aux angles rasants (Fresnel).
+     */
+    public float standaloneFloorStrength = 0.0f;
     /** Distance max (blocs) d'un rayon GSR. */
     public float maxTraceDistance = 384f;
 

@@ -25,7 +25,7 @@ décrit le mode « service » pour les shaderpacks.
 | `src/main/java/dev/gsr/render/` | SSBO, cibles écran, compilation et dispatch des compute shaders |
 | `src/main/java/dev/gsr/mixin/` | `ClientWorldMixin` (seul mixin) |
 | `src/main/java/dev/gsr/compat/` | `IrisCompat` (chargement paresseux) |
-| `src/main/resources/assets/gsr/shaders/` | `gsr_common.glsl`, `gsr_screen.glsl`, `gsr_reflect.comp`, `gsr_temporal.comp`, `gsr_composite.comp` |
+| `src/main/resources/assets/gsr/shaders/` | `gsr_common.glsl`, `gsr_screen.glsl`, `gsr_depthcopy.comp`, `gsr_reflect.comp`, `gsr_temporal.comp`, `gsr_composite.comp` |
 | `src/test/java/dev/gsr/core/CoreSelfTest.java` | Tests du cœur (24 vérifications) |
 
 Cible : **Minecraft 1.21.1, Yarn, Fabric Loader 0.16+, Fabric API, Java 21**. Versions dans
@@ -86,7 +86,7 @@ dans les logs ou à l'écran.
 - **`dev.gsr.core` n'importe rien de Minecraft, Fabric ni LWJGL.** C'est ce qui le rend testable.
 - **Threads.** Les workers ne lisent que des snapshots immuables, jamais le monde vivant. Tout appel
   au monde ou à OpenGL se fait sur le thread client.
-- **État OpenGL.** Tout ce que `GsrRenderer` modifie (programme, unité active, textures 0–4, unités
+- **État OpenGL.** Tout ce que `GsrRenderer` modifie (programme, unité active, textures 0–5, unités
   d'image) est restauré à l'identique, sinon le cache de `GlStateManager` se désynchronise et le rendu
   de Minecraft casse.
 - **Un seul mixin, sur `ClientWorld`.** Pas de mixin dans Sodium ni Iris, sauf `@Pseudo` optionnel et

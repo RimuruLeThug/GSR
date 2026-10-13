@@ -76,7 +76,7 @@ void main() {
     vec3 N  = normalize(mat3(uInvView) * nV);
 
     float rough, mask;
-    gsrStandaloneMaterial(N, rough, mask);
+    gsrStandaloneMaterial(N, px, d, rough, mask);
     if (mask <= 0.001) { imageStore(uReflOut, px, vec4(0.0, 0.0, 0.0, -1.0)); return; }
 
     // Direction : miroir parfait, ou microfacette GGX tirée (bruit -> lissé par la passe temporelle)

@@ -6,6 +6,8 @@ import static org.lwjgl.opengl.GL43C.*;
 public final class GsrScreenTargets {
     public int width = -1, height = -1;
     public int reflection;
+    /** Profondeur opaque copiée avant la couche translucide (masque eau/translucide). */
+    public int opaqueDepth;
     public final int[] history = new int[2];
     public final int[] distance = new int[2];
     public int current;           // index écrit cette frame
@@ -16,6 +18,7 @@ public final class GsrScreenTargets {
         delete();
         width = w; height = h;
         reflection = tex(GL_RGBA16F, GL_NEAREST);
+        opaqueDepth = tex(GL_R32F, GL_NEAREST);
         for (int i = 0; i < 2; i++) {
             history[i] = tex(GL_RGBA16F, GL_LINEAR);   // bilinéaire pour la reprojection
             distance[i] = tex(GL_R32F, GL_LINEAR);
@@ -39,7 +42,7 @@ public final class GsrScreenTargets {
 
     public void delete() {
         if (width < 0) return;
-        glDeleteTextures(new int[]{reflection, history[0], history[1], distance[0], distance[1]});
+        glDeleteTextures(new int[]{reflection, opaqueDepth, history[0], history[1], distance[0], distance[1]});
         width = height = -1;
     }
 }

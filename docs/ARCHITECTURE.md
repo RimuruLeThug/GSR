@@ -104,6 +104,17 @@ déclenche aucune reconstruction.
 
 ## 4. Pipeline de rendu
 
+### Passe 0 — `gsr_depthcopy.comp` : masque matériau du mode autonome (sans mixin)
+Sans G-buffer, le mode autonome doit deviner *où* refléter. Un simple masque « normale vers le haut »
+transformait herbe et cimes d'arbres en miroirs (voile laiteux aux angles rasants, vu en jeu). À
+`WorldRenderEvents.BEFORE_DEBUG_RENDER` — vérifié dans le bytecode de `WorldRenderer#render` 1.21.1 :
+le rendu debug précède la couche translucide — on copie la profondeur **opaque** (R32F). Aux passes
+suivantes, un pixel dont la profondeur finale est plus proche que l'opaque (marge 0,02 + 0,2 % de la
+distance) porte une surface translucide (eau, glace, verre) → reflet à pleine force ; les sols opaques
+orientés vers le haut reçoivent `standaloneFloorStrength` (0 par défaut). En mode « Fabuleux », l'eau
+est dans le framebuffer translucide : les passes lisent alors sa profondeur. Si la copie n'a pas eu lieu
+pendant la frame (redimensionnement), le reflet est sauté plutôt que faux.
+
 ### Passe 1 — `gsr_reflect.comp` : SSR → GSR → ciel
 1. Normale (reconstruite depuis la profondeur en mode autonome ; G-buffer sous Iris), rugosité, masque.
 2. Direction : `reflect()` si rugosité < 0,03, sinon microfacette **GGX VNDF** (Heitz 2018) tirée avec
@@ -150,9 +161,13 @@ linéaire, écriture `rgba8` dans le framebuffer principal **avant** la main et 
 * **Versionnage par page** : un résultat est jeté si une génération plus récente a été lancée ou si la
   page est sortie de la fenêtre entre-temps.
 * Ordre d'upload : splats → cellules → méta (la méta valide la page en dernier).
-* État GL : programme, unité active et textures 0–4 relus puis restaurés à l'identique (cohérence du
+* État GL : programme, unité active et textures 0–5 relus puis restaurés à l'identique (cohérence du
   cache `GlStateManager`). Les SSBO et unités d'image ne sont pas utilisés par Minecraft.
-* Pas d'OpenGL 4.3 (macOS) → GSR se désactive proprement.
+* Pas d'OpenGL 4.3 (macOS) → GSR se désactive proprement. **Détection** : Minecraft demande un contexte
+  3.2 Core et les pilotes AMD annoncent alors exactement « 3.2 » (vu en jeu : `3.2.0 Core Profile
+  Context` sur RX 7800 XT, GLSL 4.60), donc `GLCapabilities.OpenGL43` est faux. On accepte aussi
+  `ARB_compute_shader + ARB_shader_storage_buffer_object + ARB_shader_image_load_store +
+  ARB_texture_storage` avec GLSL ≥ 4.30 (LWJGL partage les pointeurs de fonctions core/ARB).
 
 ## 6. État et feuille de route
 
@@ -161,15 +176,25 @@ section signée, budget et tri par cellule, résumés, et — via `CpuReferenceT
 de `gsrTrace()` sur les mêmes octets — impacts au sol (L0), sur un pilier hors fenêtre L0 (trouvé en
 L1), dans l'eau translucide, en cône rugueux, après destruction de blocs et après recentrage toroïdal.
 
-**Non vérifié ici** (pas d'accès au toolchain Fabric ni à un GPU dans cet environnement) : compilation
-contre Minecraft (noms Yarn 1.21.1 à confirmer), compilation GLSL sur pilote réel, rendu en jeu.
+**Vérifié le 2026-10-13** (Windows 11, RX 7800 XT, pilote AMD 26.8.1, vanilla sans Sodium/Iris) :
+* compilation contre Minecraft 1.21.1 / Yarn build.3 / Fabric API 0.115.0 (versions de
+  `gradle.properties` inchangées) ; cibles du mixin (`updateListeners`, `scheduleBlockRenders`) vues
+  dans le jar remappé avec les bonnes signatures ;
+* chargement : mod initialisé, entrée dans un monde solo sans exception, les 4 compute shaders
+  compilent et se lient sur le pilote AMD ;
+* rendu (captures d'écran, caméra immobile) : l'eau reflète le relief et le soleil, l'herbe et les
+  arbres ne sont plus réfléchissants, main et HUD intacts.
+
+**Non vérifié** : stabilité en mouvement (scintillement, traînées), mode « Fabuleux », Sodium, Iris,
+pilotes NVIDIA/Intel, nuit/pluie/Nether, coût GPU (pas encore de requêtes `GL_TIME_ELAPSED`).
 
 Prochaines étapes, par ordre de rentabilité :
 1. Reflet en **demi-résolution** + upsampling guidé par la profondeur (÷4 sur les passes 1–2).
 2. **Masque d'occupation par page** (512 bits) pour sauter les cellules vides sans lire `cells[]`.
 3. Albédo depuis la **moyenne réelle des sprites** de l'atlas (au lieu de `MapColor`), teinte de biome.
-4. Mode autonome : vrai masque matériau (eau/verre poli) via un petit mixin sur le shader de terrain
-   translucide vanilla, ou en le laissant aux shaderpacks.
+4. Mode autonome : le masque par profondeur (passe 0) ne distingue pas l'eau du verre teinté ni de la
+   glace ; un vrai ID matériau demanderait un mixin sur le shader de terrain translucide, ou de le
+   laisser aux shaderpacks.
 5. Optimisation : réutiliser les sections clonées par Sodium (`@Pseudo` mixin sur sa tâche de
    meshing) pour éviter la double lecture des blocs.
 6. Portage Vulkan : SSBO → storage buffers, `layout(set, binding)` ; le code GLSL n'utilise déjà aucune

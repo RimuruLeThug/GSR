@@ -50,7 +50,7 @@ void main() {
     vec3 P  = (uInvView * vec4(vp, 1.0)).xyz;
     vec3 N  = normalize(mat3(uInvView) * gsrViewNormalFromDepth(uDepth, px, vp));
     float rough, mask;
-    gsrStandaloneMaterial(N, rough, mask);
+    gsrStandaloneMaterial(N, px, d, rough, mask);
 
     // ---- reprojection hybride surface / image virtuelle ----
     vec3 Pprev = P + uCamDelta;

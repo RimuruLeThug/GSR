@@ -1,0 +1,17 @@
+// =============================================================================================
+//  GSR — copie de la profondeur OPAQUE (avant la couche translucide), mode autonome.
+//  Comparée plus tard à la profondeur finale : là où la finale est plus proche, une surface
+//  translucide (eau, glace, verre) a été dessinée -> masque de réflexion sans G-buffer matériau.
+// =============================================================================================
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0) uniform sampler2D uDepth;
+layout(r32f, binding = 0) writeonly uniform image2D uOpaqueOut;
+
+uniform vec2 uScreenSize;
+
+void main() {
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(px, ivec2(uScreenSize)))) return;
+    imageStore(uOpaqueOut, px, vec4(texelFetch(uDepth, px, 0).r));
+}

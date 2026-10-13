@@ -12,6 +12,10 @@ uniform vec2  uScreenSize;
 uniform int   uFrame;
 uniform float uRoughness;   // rugosité uniforme (mode autonome : pas de G-buffer matériau)
 uniform float uStrength;
+uniform float uFloorStrength; // force sur les sols OPAQUES orientés vers le haut (0 = eau/translucides seuls)
+
+// Profondeur opaque (copiée avant la couche translucide) : sert au masque eau/translucide.
+layout(binding = 5) uniform sampler2D uOpaqueDepth;
 
 const float GSR_PI = 3.14159265;
 
@@ -44,11 +48,21 @@ vec3 gsrViewNormalFromDepth(sampler2D depthTex, ivec2 px, vec3 vp) {
     return normalize(cross(dx, dy));
 }
 
-// Mode autonome : rugosité uniforme ; masque = surfaces orientées vers le haut (eau, sols "mouillés").
+// 1 si une surface translucide (eau, glace, verre) a été dessinée devant l'opaque à ce pixel.
+// d = profondeur finale (avec translucides). Marge relative : insensible aux arrondis de profondeur.
+float gsrTranslucentMask(ivec2 px, float d) {
+    float zFinal  = -gsrLinearViewZ(d);
+    float zOpaque = -gsrLinearViewZ(texelFetch(uOpaqueDepth, px, 0).r);
+    return step(0.02 + 0.002 * zFinal, zOpaque - zFinal);
+}
+
+// Mode autonome : rugosité uniforme ; masque = surfaces orientées vers le haut, à pleine force sur
+// l'eau / les translucides, à uFloorStrength sur les sols opaques (herbe, pierre : 0 par défaut).
 // En intégration Iris, ces valeurs viennent du G-buffer du pack (labPBR : specular.r = lissé).
-void gsrStandaloneMaterial(vec3 nWorld, out float rough, out float mask) {
+void gsrStandaloneMaterial(vec3 nWorld, ivec2 px, float d, out float rough, out float mask) {
     rough = uRoughness;
-    mask  = smoothstep(0.85, 0.97, nWorld.y) * uStrength;
+    float kind = mix(uFloorStrength, 1.0, gsrTranslucentMask(px, d));
+    mask  = smoothstep(0.85, 0.97, nWorld.y) * kind * uStrength;
 }
 
 // Bruit : interleaved gradient noise + séquence R2 (faible discrépance) décalée par frame.

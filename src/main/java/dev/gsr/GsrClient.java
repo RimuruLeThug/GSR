@@ -47,14 +47,21 @@ public final class GsrClient implements ClientModInitializer {
         WorldRenderEvents.START.register(ctx -> {
             if (manager != null && RENDERER.available()) RENDERER.beginFrame(ctx, manager, CONFIG);
         });
+        // Avant la couche translucide (vérifié dans WorldRenderer#render 1.21.1 : le rendu debug la précède).
+        WorldRenderEvents.BEFORE_DEBUG_RENDER.register(ctx -> {
+            if (standaloneActive()) RENDERER.captureOpaqueDepth(ctx);
+        });
         WorldRenderEvents.LAST.register(ctx -> {
-            if (manager != null && CONFIG.standaloneEnabled && !IrisCompat.isShaderPackInUse())
-                RENDERER.renderStandalone(ctx, CONFIG);
+            if (standaloneActive()) RENDERER.renderStandalone(ctx, CONFIG);
         });
         WorldRenderEvents.END.register(RENDERER::endFrame);
 
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(() -> ensureWorld(null)));
         LOG.info("GSR (Gaussian Space Reflections) initialisé");
+    }
+
+    private static boolean standaloneActive() {
+        return manager != null && CONFIG.standaloneEnabled && !IrisCompat.isShaderPackInUse();
     }
 
     private static void tick(MinecraftClient client) {
