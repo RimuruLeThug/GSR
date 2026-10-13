@@ -73,8 +73,14 @@ public final class GsrLayout {
     //  bits 16..23 : lumière (sky << 4 | block)
     //  bits 24..27 : émission 0..15
     //  bits 28..29 : niveau de clipmap
+    //  bit  30     : sans ombrage par face (plantes en croix)
     public static int packSplatData(int oct16, int light8, int emission4, int level) {
-        return (oct16 & 0xFFFF) | ((light8 & 0xFF) << 16) | ((emission4 & 0xF) << 24) | ((level & 0x3) << 28);
+        return packSplatData(oct16, light8, emission4, level, false);
+    }
+
+    /** Bit 30 : ombrage par face désactivé (= GSR_DATA_UNSHADED). */
+    public static int packSplatData(int oct16, int light8, int emission4, int level, boolean unshaded) {
+        return (oct16 & 0xFFFF) | ((light8 & 0xFF) << 16) | ((emission4 & 0xF) << 24) | ((level & 0x3) << 28) | (unshaded ? 1 << 30 : 0);
     }
 
     private static float signNotZero(float v) { return v >= 0f ? 1f : -1f; }

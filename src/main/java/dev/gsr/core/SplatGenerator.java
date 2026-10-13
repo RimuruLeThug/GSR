@@ -60,7 +60,7 @@ public final class SplatGenerator {
                         py[n] = (y + 0.5f + 0.5f * dir[1]) * vb;
                         pz[n] = (z + 0.5f + 0.5f * dir[2]) * vb;
                         alb[n] = grid.albedo(x, y, z, GsrLayout.faceGroup(d));
-                        dat[n] = GsrLayout.packSplatData(octs[d], lt, em, key.level());
+                        dat[n] = GsrLayout.packSplatData(octs[d], lt, em, key.level(), grid.unshaded(x, y, z));
                         cell[n] = c;
                         prio[n] = (lt >> 4) + (nk == GsrLayout.KIND_AIR ? 16 : 0); // 0..31
                         n++;

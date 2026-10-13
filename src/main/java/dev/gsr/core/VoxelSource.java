@@ -19,6 +19,8 @@ public interface VoxelSource {
     int light(int x, int y, int z);
     /** Émission (luminance du bloc), 0..15. */
     int emission(int x, int y, int z);
+    /** Modèle dessiné sans ombrage par face (plantes en croix, `"shade": false`) : splats à ombrage 1,0. */
+    default boolean unshaded(int x, int y, int z) { return false; }
 
     /** Sentinelle : section entièrement vide (air). */
     VoxelSource EMPTY = new VoxelSource() {

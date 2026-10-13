@@ -34,7 +34,8 @@ public final class GsrConfig {
 
     // ---- Mode autonome (sans shaderpack Iris) ----
     public boolean standaloneEnabled = true;
-    public float standaloneRoughness = 0.08f;
+    /** 0 = miroir (eau calme). Au-dessus de 0,03 : directions GGX tirées par frame, qui font « bouillir » les bords des reflets en rotation. */
+    public float standaloneRoughness = 0.0f;
     public float standaloneStrength = 1.0f;
     /**
      * Force des reflets sur les sols OPAQUES orientés vers le haut (herbe, pierre...). L'eau et les

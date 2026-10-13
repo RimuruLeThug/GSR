@@ -156,6 +156,10 @@ public final class McSnapshotSource implements SectionSnapshotSource {
             int id = rawId(which(x, y, z), x, y, z);
             return id < 0 ? 0 : mat.emission(id);
         }
+        @Override public boolean unshaded(int x, int y, int z) {
+            int id = rawId(which(x, y, z), x, y, z);
+            return id >= 0 && mat.unshaded(id);
+        }
         @Override public int light(int x, int y, int z) {
             int i = which(x, y, z);
             int s = !hasSky ? 0 : sky[i] == null ? 15 : sky[i].get(x & 15, y & 15, z & 15);

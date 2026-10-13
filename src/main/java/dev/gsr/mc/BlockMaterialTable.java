@@ -56,13 +56,16 @@ public final class BlockMaterialTable {
     private final int[] tinted;   // [id * G + groupe] : B, 0xRRGGBB
     private final byte[] tintType;
     private final byte[] emission;
+    private final boolean[] unshaded;
 
     private BlockMaterialTable(int n) {
-        kind = new byte[n]; albedo = new int[n * G]; tinted = new int[n * G]; tintType = new byte[n]; emission = new byte[n];
+        kind = new byte[n]; albedo = new int[n * G]; tinted = new int[n * G]; tintType = new byte[n]; emission = new byte[n]; unshaded = new boolean[n];
     }
 
     public int kind(int rawId) { return kind[rawId]; }
     public int tintType(int rawId) { return tintType[rawId]; }
+    /** Modèle sans ombrage par face (tous ses quads ont « shade » à false, comme les plantes en croix). */
+    public boolean unshaded(int rawId) { return unshaded[rawId]; }
     /** Albédo avec la teinte par défaut (plaine). */
     public int albedo(int rawId, int faceGroup) { return albedo(rawId, faceGroup, DEFAULT_TINTS[tintType[rawId]]); }
     /** Albédo pour une teinte de biome 0xRRGGBB (ignorée si le bloc n'est pas teinté). */
@@ -127,6 +130,7 @@ public final class BlockMaterialTable {
                     float cov = modelCoverage(s, models, sprites, rnd);
                     k = cov > 0f ? GsrLayout.KIND_TRANSLUCENT : GsrLayout.KIND_AIR;
                     a = Math.max(40, Math.min(200, Math.round(cov * 255f)));
+                    t.unshaded[id] = noShade(s, models, rnd);
                 } else {
                     k = GsrLayout.KIND_AIR;                            // torches, rails, nénuphars
                 }
@@ -325,6 +329,21 @@ public final class BlockMaterialTable {
             return n == 0 ? 0f : sum / n;
         } catch (Throwable t) {
             return 0f;
+        }
+    }
+
+    /** Vrai si tous les quads du modèle sont dessinés sans ombrage par face (vanilla : « shade »: false). */
+    private static boolean noShade(BlockState s, BlockRenderManager models, Random rnd) {
+        try {
+            BakedModel model = models.getModel(s);
+            rnd.setSeed(42L);
+            List<BakedQuad> quads = new ArrayList<>(model.getQuads(s, null, rnd));
+            for (Direction d : Direction.values()) { rnd.setSeed(42L); quads.addAll(model.getQuads(s, d, rnd)); }
+            if (quads.isEmpty()) return false;
+            for (BakedQuad q : quads) if (q.hasShade()) return false;
+            return true;
+        } catch (Throwable e) {
+            return false;
         }
     }
 

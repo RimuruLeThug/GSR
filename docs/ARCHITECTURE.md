@@ -76,7 +76,7 @@ Format d'un splat (std430, 32 o) :
 | `posSigmaT.xyz` | position **relative à l'origine de la page** (pas de perte de précision à ±30 M blocs) |
 | `posSigmaT.w` | σ tangentiel |
 | `data.x` | albédo sRGB + opacité `0xAARRGGBB` |
-| `data.y` | normale octaédrique 8+8 · lumière ciel/bloc 4+4 · émission 4 · niveau 2 |
+| `data.y` | normale octaédrique 8+8 · lumière ciel/bloc 4+4 · émission 4 · niveau 2 · sans ombrage 1 (bit 30) |
 | `data.z` | σ normal (bits float) |
 | `data.w` | réservé (ID matériau, rugosité réfléchie…) |
 
@@ -290,6 +290,35 @@ après. Outils ajoutés : `/gsr debug raw` (reflet GSR sans Fresnel) et `/gsr de
 transmittance, g = distance / 16, b = (niveau + 1) / 4), capturés aussi par l'autoshot. Limite : le
 reflet GSR d'une touffe reste un voile vert flou (σ = 0,55 bloc), moins net que le SSR.
 
+**Touffes assombries et bords de reflets agités en rotation : corrigés** (2026-10-13, signalés par
+l'utilisateur après le correctif ci-dessus) :
+* *Herbes plus sombres dans le reflet GSR que dans le SSR.* Vanilla dessine les plantes en croix sans
+  ombrage par face (`"shade": false` dans `block/cross.json`, vérifié dans le jar 1.21.1) ; le GSR leur
+  appliquait 0,6 / 0,8 sur les côtés. `BlockMaterialTable` marque les modèles dont aucun quad n'est ombré,
+  `VoxelSource#unshaded` → `VoxelGrid` (niveau 0 seulement) → bit 30 de `data.y` → `gsrShadeSplat` prend
+  un ombrage de 1,0. Test : « Plantes en croix » dans `CoreSelfTest`.
+* *Bords des reflets qui « bouillonnent » quand on tourne la caméra (pas en avançant).* En rotation pure,
+  chaque rayon de reflet est le même dans le monde : seul le tirage GGX par frame varie. Avec la rugosité
+  par défaut de 0,08 (héritée de l'import initial), ±0,7° de dispersion, soit un demi-bloc à 40 blocs ; la
+  passe temporelle en moyenne le bruit, mais en rotation la reprojection et le clipping de voisinage font
+  changer la silhouette d'une frame à l'autre (vu frame par frame sur les arbres de gauche, demi et pleine
+  résolution). En miroir (rugosité 0), les silhouettes glissent sans se déformer, aux deux résolutions, et
+  le reflet est nettement plus net (le flou venait de l'accumulation du bruit). **Rugosité autonome par
+  défaut : 0** (eau calme = miroir). Le chemin GGX reste pour les shaderpacks et `standaloneRoughness` > 0,03.
+* Outils : `/gsr debug refl` (reflet hybride SSR + GSR après la passe temporelle, sans Fresnel ni scène) ;
+  autoshot `-PgsrVideo=<frames>,<degrés>` (« vidéo » : rotation d'un pas fixe à **chaque frame**, capture
+  juste après le rendu du monde, équivalente à un film à très haute cadence), `-PgsrMove=dx,dy,dz,dyaw`
+  (rafales par tick avec caméra en mouvement), `-PgsrBursts=refl,refl+scale1,refl+mirror,...`
+  (configurations de rafale combinables) ; `tools/JerkDiff.java` (écart de chaque frame à la moyenne de ses
+  voisines, carte de chaleur). JerkDiff ne départage pas les cas : un reflet plus net contient plus de
+  détails, donc plus d'à-coups légitimes ; le diagnostic s'est fait sur bandes d'images frame par frame.
+* Testé à la résolution de l'utilisateur (fenêtre 2560×1369) ; les seuils du SSR et de l'upsampling sont en
+  espace vue ou relatifs à la taille d'écran, la demi-résolution suit `uScreenSize`. Non testé à d'autres
+  tailles de fenêtre.
+* Remarqué, non corrigé : la matrice de projection de Minecraft inclut le balancement de la vue en marchant,
+  l'œil n'est donc pas exactement à l'origine de l'espace vue alors que les shaders prennent `normalize(P)`
+  comme direction de vue (erreur ~1° près de la caméra). L'utilisateur ne voit pas de défaut en avançant.
+
 Historique du diagnostic :
 * **Scintillement de l'eau** signalé par l'utilisateur, absent avant le masque de briques et la
   demi-résolution. Encore présent après la borne de LOD du masque (`7ecff59`). **Pas revérifié depuis
@@ -359,7 +388,7 @@ Prochaines étapes, par ordre de rentabilité :
    trop clair) formait un amas vert vif. Il ne se raccordait pas au SSR, d'où une bande verte qui
    suivait le bord de l'écran, là où le SSR passe la main. Vérifié par captures `/gsr debug gsr` avant/après.
    Teinte de biome par position : faite (voir plus haut).
-   Outils de diagnostic : `/gsr debug normal|ssr|gsr|raw|hit`, `/gsr bricks on|off`, et
+   Outils de diagnostic : `/gsr debug normal|ssr|gsr|raw|hit|refl`, `/gsr bricks on|off`, et
    `gradlew runClient -PgsrAutoshot=<préfixe>` (5 captures automatiques, une par vue, dans `run/screenshots`).
    `-PgsrCmds="tp @s x y z;time set 18000|gsr stats"` envoie des commandes 5 s après l'entrée dans le
    monde (et la partie après `|`, 13 s avant les captures, qui commencent alors à 45 s).

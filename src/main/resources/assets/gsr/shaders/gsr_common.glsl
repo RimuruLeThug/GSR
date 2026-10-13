@@ -124,6 +124,7 @@ vec3 gsrShadeSplat(vec3 albedoSrgb, vec3 n, uint data) {
     // Ombrage fixe vanilla : dessus 1,0, dessous 0,5, nord/sud 0,8, est/ouest 0,6
     vec3 n2 = n * n;
     float shade = 0.6 * n2.x + 0.8 * n2.z + (n.y > 0.0 ? 1.0 : 0.5) * n2.y;
+    if ((data & (1u << 30u)) != 0u) shade = 1.0;              // plantes en croix : « shade »: false
     return pow(albedoSrgb * l * shade, vec3(2.2));
 }
 #else
@@ -134,7 +135,7 @@ vec3 gsrShadeSplat(vec3 albedoSrgb, vec3 n, uint data) {
     float em  = float((data >> 24u) & 0xFu) / 15.0;
     float day = gsrFrame.sunDir.w;
     vec3 amb  = mix(gsrFrame.skyHorizon.rgb, gsrFrame.skyZenith.rgb, n.y * 0.5 + 0.5) * (sky * sky) * day;
-    vec3 sun  = gsrFrame.sunColor.rgb * max(dot(n, gsrFrame.sunDir.xyz), 0.0) * pow(sky, 4.0) * day;
+    vec3 sun  = gsrFrame.sunColor.rgb * ((data & (1u << 30u)) != 0u ? 0.6 : max(dot(n, gsrFrame.sunDir.xyz), 0.0)) * pow(sky, 4.0) * day;
     vec3 bl   = gsrFrame.blockLight.rgb * (blk * blk);
     return albedo * (amb * 0.6 + sun + bl) + albedo * em * gsrFrame.blockLight.w;
 }

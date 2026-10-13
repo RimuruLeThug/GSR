@@ -44,6 +44,9 @@ tasks.register('coreSelfTest', JavaExec) {
 tasks.named('runClient', JavaExec) {
     if (project.hasProperty('gsrAutoshot')) systemProperty 'gsr.autoshot', project.property('gsrAutoshot')
     if (project.hasProperty('gsrCmds')) systemProperty 'gsr.autoshotCmds', project.property('gsrCmds')
+    if (project.hasProperty('gsrMove')) systemProperty 'gsr.autoshotMove', project.property('gsrMove')
+    if (project.hasProperty('gsrBursts')) systemProperty 'gsr.autoshotBursts', project.property('gsrBursts')
+    if (project.hasProperty('gsrVideo')) systemProperty 'gsr.autoshotVideo', project.property('gsrVideo')
 }
 
 processResources {

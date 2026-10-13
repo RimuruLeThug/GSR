@@ -12,6 +12,7 @@ public final class VoxelGrid {
     final int[][] albedo = new int[GsrLayout.FACE_GROUPS][S * S * S];   // [groupe de faces][voxel]
     final byte[] light = new byte[S * S * S];
     final byte[] emission = new byte[S * S * S];
+    final boolean[] unshaded = new boolean[S * S * S];   // niveau 0 seulement
 
     private static int idx(int x, int y, int z) { return (x + 1) + S * ((y + 1) + S * (z + 1)); }
 
@@ -19,6 +20,7 @@ public final class VoxelGrid {
     public int albedo(int x, int y, int z, int faceGroup) { return albedo[faceGroup][idx(x, y, z)]; }
     public int light(int x, int y, int z) { return light[idx(x, y, z)] & 0xFF; }
     public int emission(int x, int y, int z) { return emission[idx(x, y, z)]; }
+    public boolean unshaded(int x, int y, int z) { return unshaded[idx(x, y, z)]; }
 
     private static boolean faceNeighbourOrInner(int x, int y, int z) {
         int out = 0;
@@ -42,6 +44,7 @@ public final class VoxelGrid {
                     if (k != GsrLayout.KIND_AIR) {
                         for (int f = 0; f < GsrLayout.FACE_GROUPS; f++) g.albedo[f][i] = src.albedo(x, y, z, f);
                         g.emission[i] = (byte) src.emission(x, y, z);
+                        g.unshaded[i] = src.unshaded(x, y, z);
                     }
                 }
         return g;

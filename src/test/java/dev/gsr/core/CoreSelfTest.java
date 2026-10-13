@@ -206,6 +206,33 @@ public final class CoreSelfTest {
                     "mip1 : albédo dessus = herbe, côtés = terre");
         }
 
+        System.out.println("== Plantes en croix : splats sans ombrage par face (bit 30)");
+        {
+            // Bug : les herbes (« shade »: false en vanilla) prenaient l'ombrage 0,6/0,8 des côtés -> reflet
+            // GSR des touffes plus sombre que le SSR au bord de l'écran.
+            VoxelSource plant = new VoxelSource() {
+                public int kind(int x, int y, int z) {
+                    return y == 3 && z == 4 && (x == 4 || x == 8) ? (x == 4 ? GsrLayout.KIND_TRANSLUCENT : GsrLayout.KIND_OPAQUE) : GsrLayout.KIND_AIR;
+                }
+                public int albedo(int x, int y, int z) { return 0x80608040; }
+                public int light(int x, int y, int z) { return 0xF0; }
+                public int emission(int x, int y, int z) { return 0; }
+                public boolean unshaded(int x, int y, int z) { return x == 4; }
+            };
+            PageData pd = SplatGenerator.generate(new PageKey(0, 0, 0, 0), 1, VoxelGrid.fromSource(plant), new GsrConfig());
+            int flagged = 0, plain = 0;
+            for (int i = 0; i < pd.splatCount(); i++) {
+                int data = pd.splats().getInt(i * 32 + 20);
+                float x = pd.splats().getFloat(i * 32);
+                boolean bit = (data & (1 << 30)) != 0;
+                if (x < 6f && bit) flagged++;
+                if (x > 6f && !bit) plain++;
+            }
+            check(pd.splatCount() == 12 && flagged == 6 && plain == 6,
+                    "plante : 6 splats marqués sans ombrage, bloc opaque : 6 splats ombrés (" + flagged + "/" + plain + ")");
+            check(GsrLayout.packSplatData(0xFFFF, 0xFF, 0xF, 3, false) >>> 30 == 0, "bit 30 libre sans le drapeau (niveau 3, tout à 1)");
+        }
+
         System.out.println("== Résumés de section");
         {
             World w = new World();

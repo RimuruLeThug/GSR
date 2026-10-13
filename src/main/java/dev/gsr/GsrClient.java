@@ -81,6 +81,7 @@ public final class GsrClient implements ClientModInitializer {
             if (standaloneActive()) RENDERER.renderStandalone(ctx, CONFIG);
         });
         WorldRenderEvents.END.register(RENDERER::endFrame);
+        if (AUTOSHOT != null) WorldRenderEvents.END.register(ctx -> videoFrame(MinecraftClient.getInstance()));
 
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> dispatcher.register(
                 ClientCommandManager.literal("gsr")
@@ -102,10 +103,10 @@ public final class GsrClient implements ClientModInitializer {
                                     c.getSource().sendFeedback(Text.literal("GSR : reflet en 1/" + CONFIG.standaloneResolutionScale + " de résolution"));
                                     return 1;
                                 })))
-                        // /gsr debug normal|ssr|gsr|raw|hit : isole la source du reflet ; raw = GSR sans Fresnel, hit = T / distance / niveau en r / g / b
+                        // /gsr debug normal|ssr|gsr|raw|hit|refl : isole la source du reflet ; raw = GSR sans Fresnel, hit = T / distance / niveau en r / g / b, refl = reflet hybride sans Fresnel
                         .then(ClientCommandManager.literal("debug")
                                 .then(debugView("normal", 0)).then(debugView("ssr", 1)).then(debugView("gsr", 2))
-                                .then(debugView("raw", 3)).then(debugView("hit", 4)))
+                                .then(debugView("raw", 3)).then(debugView("hit", 4)).then(debugView("refl", 5)))
                         // /gsr bricks on|off : masque de briques (mesure avant/après au même endroit)
                         .then(ClientCommandManager.literal("bricks")
                                 .then(brickToggle("on", true)).then(brickToggle("off", false)))));
@@ -133,8 +134,21 @@ public final class GsrClient implements ClientModInitializer {
      * d'intervalle, caméra immobile. « off » (mod coupé) mesure l'animation propre de l'eau vanilla.
      * Comparer avec : java tools/FlickerDiff.java run/screenshots/<préfixe>_flicker_<config>_*.png
      */
-    private static final String[] FLICKER_CONFIGS = {"off", "default", "nobricks", "scale1", "gsronly"};
-    private static final int FLICKER_FRAMES = 8;
+    private static final String[] FLICKER_CONFIGS = System.getProperty("gsr.autoshotBursts", "off,default,nobricks,scale1,gsronly").split(",");
+    /**
+     * -Dgsr.autoshotMove="dx,dy,dz,dyaw" : déplacement de la caméra par tick pendant les rafales (blocs,
+     * degrés), pour observer le reflet en mouvement. Les rafales passent alors à 24 captures.
+     */
+    private static final float[] AUTOSHOT_MOVE = parseMove(System.getProperty("gsr.autoshotMove"));
+    private static final int FLICKER_FRAMES = AUTOSHOT_MOVE != null ? 24 : 8;
+
+    private static float[] parseMove(String s) {
+        if (s == null || s.isBlank()) return null;
+        String[] p = s.split(",");
+        float[] m = new float[4];
+        for (int i = 0; i < Math.min(4, p.length); i++) m[i] = Float.parseFloat(p[i].strip());
+        return m;
+    }
     private static int autoShotTicks;
 
     /**
@@ -166,6 +180,7 @@ public final class GsrClient implements ClientModInitializer {
             CONFIG.debugView = (i + 1) % AUTOSHOT_VIEWS.length;   // vue suivante ; normal après la dernière
             return;
         }
+        if (AUTOSHOT_VIDEO != null) { videoTick(client); return; }
         // Rafales : 60 ticks de stabilisation par configuration, puis une capture par tick.
         t -= 60 * AUTOSHOT_VIEWS.length;
         int c = t / (60 + FLICKER_FRAMES), k = t % (60 + FLICKER_FRAMES) - 60;
@@ -175,9 +190,50 @@ public final class GsrClient implements ClientModInitializer {
             frozenPos = null;
             return;
         }
-        freezeCamera(client);
+        freezeCamera(client, Math.max(k, 0));
         if (k == -60) applyFlickerConfig(FLICKER_CONFIGS[c]);
         if (k >= 0) saveShot(client, AUTOSHOT + "_flicker_" + FLICKER_CONFIGS[c] + "_" + k);
+    }
+
+    /**
+     * -Dgsr.autoshotVideo="frames,dyaw" : à la place des rafales par tick, une « vidéo » par configuration :
+     * la caméra tourne de dyaw degrés à CHAQUE FRAME, capturée juste après le rendu du monde (sans main ni
+     * HUD). Pas angulaire fixe par frame, indépendant de la cadence réelle : reproduit une rotation à la
+     * souris filmée à très haute fréquence. Fichiers <préfixe>_video_<config>_<n>.png.
+     */
+    private static final float[] AUTOSHOT_VIDEO = parseMove(System.getProperty("gsr.autoshotVideo"));
+    private static int videoConfig, videoWait, videoLeft, videoIndex;
+    private static float videoYaw;
+    private static String videoName;
+
+    private static void videoTick(MinecraftClient client) {
+        if (videoLeft > 0) return;   // vidéo en cours : pilotée par videoFrame
+        if (videoConfig > FLICKER_CONFIGS.length) return;
+        if (videoConfig == FLICKER_CONFIGS.length) {
+            applyFlickerConfig("default");
+            if (frozenPos != null) client.options.getBobView().setValue(frozenBob);
+            frozenPos = null;
+            videoConfig++;
+            return;
+        }
+        freezeCamera(client, 0);
+        if (videoWait == 0) applyFlickerConfig(FLICKER_CONFIGS[videoConfig]);
+        if (++videoWait < 60) return;
+        videoWait = 0;
+        videoName = AUTOSHOT + "_video_" + FLICKER_CONFIGS[videoConfig++];
+        videoIndex = 0;
+        videoYaw = frozenYaw;
+        videoLeft = (int) AUTOSHOT_VIDEO[0];
+    }
+
+    /** WorldRenderEvents.END : capture la frame qui vient d'être rendue, puis avance la caméra d'un pas. */
+    private static void videoFrame(MinecraftClient client) {
+        if (videoLeft <= 0 || client.player == null) return;
+        saveShot(client, videoName + "_" + videoIndex++);
+        videoYaw += AUTOSHOT_VIDEO[1];
+        if (--videoLeft == 0) videoYaw = frozenYaw;
+        client.player.setYaw(videoYaw);
+        client.player.prevYaw = videoYaw;
     }
 
     private static Vec3d frozenPos;
@@ -185,7 +241,7 @@ public final class GsrClient implements ClientModInitializer {
     private static boolean frozenBob;
 
     /** Caméra strictement immobile pendant les rafales : un joueur dans l'eau flotte et dérive sinon. */
-    private static void freezeCamera(MinecraftClient client) {
+    private static void freezeCamera(MinecraftClient client, int step) {
         var p = client.player;
         if (frozenPos == null) {
             frozenPos = p.getPos();
@@ -195,18 +251,27 @@ public final class GsrClient implements ClientModInitializer {
             client.options.getBobView().setValue(false);
             p.getAbilities().flying = true;
         }
-        p.refreshPositionAndAngles(frozenPos.x, frozenPos.y, frozenPos.z, frozenYaw, frozenPitch);
+        float[] m = AUTOSHOT_MOVE != null ? AUTOSHOT_MOVE : new float[4];
+        int s0 = Math.max(step - 1, 0);   // position du tick précédent : interpolation fluide entre ticks
+        p.refreshPositionAndAngles(frozenPos.x + m[0] * step, frozenPos.y + m[1] * step, frozenPos.z + m[2] * step,
+                frozenYaw + m[3] * step, frozenPitch);
         p.resetPosition();
-        p.prevYaw = frozenYaw;
+        p.prevX = frozenPos.x + m[0] * s0; p.prevY = frozenPos.y + m[1] * s0; p.prevZ = frozenPos.z + m[2] * s0;
+        p.prevYaw = frozenYaw + m[3] * s0;
         p.prevPitch = frozenPitch;
         p.setVelocity(0, 0, 0);
     }
 
+    private static float baseRoughness = -1f;
+    /** Configuration de rafale : mots-clés combinables par « + » (ex. « refl+scale1 »). */
     private static void applyFlickerConfig(String name) {
-        CONFIG.standaloneEnabled = !name.equals("off");
-        CONFIG.brickMask = !name.equals("nobricks");
-        CONFIG.standaloneResolutionScale = name.equals("scale1") ? 1 : 2;
-        CONFIG.debugView = name.equals("gsronly") ? 2 : 0;
+        List<String> w = List.of(name.split("[+]"));
+        CONFIG.standaloneEnabled = !w.contains("off");
+        CONFIG.brickMask = !w.contains("nobricks");
+        CONFIG.standaloneResolutionScale = w.contains("scale1") ? 1 : 2;
+        CONFIG.debugView = w.contains("gsronly") ? 2 : w.contains("refl") ? 5 : 0;
+        if (baseRoughness < 0f) baseRoughness = CONFIG.standaloneRoughness;
+        CONFIG.standaloneRoughness = w.contains("mirror") ? 0f : baseRoughness;
     }
 
     private static void saveShot(MinecraftClient client, String name) {
