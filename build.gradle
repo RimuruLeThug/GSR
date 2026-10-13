@@ -1,0 +1,35 @@
+plugins {
+    id 'fabric-loom' version '1.7-SNAPSHOT'
+}
+
+version = project.mod_version
+group = 'dev.gsr'
+
+repositories {
+    maven { url = 'https://api.modrinth.com/maven' }   // Iris (API seulement, optionnelle)
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    // Iris : compilation seulement, chargé dynamiquement via IrisCompat
+    modCompileOnly "maven.modrinth:iris:${project.iris_version}"
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+}
+
+// Tests du cœur (sans Minecraft) : ./gradlew coreSelfTest
+tasks.register('coreSelfTest', JavaExec) {
+    dependsOn 'testClasses'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'dev.gsr.core.CoreSelfTest'
+}
+
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('fabric.mod.json') { expand 'version': project.version }
+}

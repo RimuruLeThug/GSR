@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "Bash(./gradlew:*)",
+      "Bash(gradlew.bat:*)",
+      "Bash(gradle:*)",
+      "Bash(java:*)",
+      "Bash(javac:*)",
+      "Bash(git:*)",
+      "Bash(rg:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(mv:*)",
+      "Bash(cp:*)",
+      "Bash(rm:*)",
+      "Bash(unzip:*)",
+      "Bash(tail:*)",
+      "Bash(cat:*)"
+    ],
+    "deny": [
+      "Bash(git push:*)"
+    ]
+  }
+}

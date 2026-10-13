@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "gsr",
+  "version": "${version}",
+  "name": "GSR - Gaussian Space Reflections",
+  "description": "Reflets hybrides SSR + champ de Gaussiennes 3D (clipmap en cascade) autour du joueur.",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.gsr.GsrClient"]
+  },
+  "mixins": ["gsr.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "fabric-api": "*",
+    "minecraft": "~1.21.1",
+    "java": ">=21"
+  },
+  "suggests": {
+    "sodium": "*",
+    "iris": "*"
+  }
+}

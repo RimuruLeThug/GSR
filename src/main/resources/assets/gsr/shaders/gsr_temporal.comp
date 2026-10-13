@@ -1,0 +1,95 @@
+// =============================================================================================
+//  GSR — Passe 2 : accumulation temporelle (reprojection + clipping de voisinage)
+//
+//  Deux reprojections, mélangées selon la rugosité :
+//   - surfaces rugueuses : reprojection de la SURFACE (le reflet flou "colle" au sol) ;
+//   - surfaces lisses   : reprojection de l'IMAGE VIRTUELLE (P + V·distance d'impact) : le reflet
+//     d'un miroir se déplace avec la parallaxe de l'objet réfléchi, pas avec le miroir.
+//  Historique long + clipping large sur le rugueux (tue le bruit GGX), court + serré sur le lisse
+//  (pas de traînées) : netteté sur l'eau calme, dispersion naturelle sur les blocs mats.
+// =============================================================================================
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#include "gsr_screen.glsl"
+
+layout(binding = 0) uniform sampler2D uDepth;
+layout(binding = 2) uniform sampler2D uCurrent;   // rgb + distance d'impact
+layout(binding = 3) uniform sampler2D uHistory;   // rgb + longueur d'historique
+layout(binding = 4) uniform sampler2D uPrevDist;  // distance caméra de la frame précédente
+layout(rgba16f, binding = 0) writeonly uniform image2D uHistoryOut;
+layout(r32f,    binding = 1) writeonly uniform image2D uDistOut;
+
+uniform mat4 uPrevViewProj;   // proj_{n-1} · view_{n-1}, espace relatif à la caméra n-1
+uniform vec3 uCamDelta;       // camPos_n − camPos_{n-1}
+uniform int  uHistoryValid;
+
+vec3 toYCoCg(vec3 c) { return vec3(0.25 * c.r + 0.5 * c.g + 0.25 * c.b, 0.5 * c.r - 0.5 * c.b, -0.25 * c.r + 0.5 * c.g - 0.25 * c.b); }
+vec3 fromYCoCg(vec3 c) { return vec3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z); }
+
+vec3 clipToAABB(vec3 center, vec3 extent, vec3 q) {
+    vec3 v = q - center;
+    vec3 a = abs(v / max(extent, vec3(1e-4)));
+    float m = max(a.x, max(a.y, a.z));
+    return m > 1.0 ? center + v / m : q;
+}
+
+void main() {
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(px, ivec2(uScreenSize)))) return;
+
+    vec4  cur = texelFetch(uCurrent, px, 0);
+    float d   = texelFetch(uDepth, px, 0).r;
+    if (d >= 1.0 || cur.a < 0.0) {
+        imageStore(uHistoryOut, px, vec4(0.0));
+        imageStore(uDistOut, px, vec4(1e9));
+        return;
+    }
+
+    vec2 uv = (vec2(px) + 0.5) / uScreenSize;
+    vec3 vp = gsrViewPos(uv, d);
+    vec3 P  = (uInvView * vec4(vp, 1.0)).xyz;
+    vec3 N  = normalize(mat3(uInvView) * gsrViewNormalFromDepth(uDepth, px, vp));
+    float rough, mask;
+    gsrStandaloneMaterial(N, rough, mask);
+
+    // ---- reprojection hybride surface / image virtuelle ----
+    vec3 Pprev = P + uCamDelta;
+    vec2 uvSurf = gsrProject(uPrevViewProj, Pprev);
+    vec3 Pvirt  = P + normalize(P) * cur.a;
+    vec2 uvVirt = gsrProject(uPrevViewProj, Pvirt + uCamDelta);
+    float smoothF = 1.0 - smoothstep(0.1, 0.45, rough);
+    vec2 uvPrev = mix(uvSurf, uvVirt, smoothF);
+
+    bool valid = uHistoryValid != 0
+              && all(greaterThanEqual(uvPrev, vec2(0.0))) && all(lessThanEqual(uvPrev, vec2(1.0)))
+              && all(greaterThanEqual(uvSurf, vec2(0.0))) && all(lessThanEqual(uvSurf, vec2(1.0)));
+    if (valid) {   // désocclusion : la surface était-elle visible au même endroit ?
+        float prevDist = textureLod(uPrevDist, uvSurf, 0.0).r;
+        float expected = length(Pprev);
+        valid = abs(prevDist - expected) < 0.05 * expected + 0.1;
+    }
+
+    // ---- statistiques du voisinage 3x3 (YCoCg) ----
+    vec3 m1 = vec3(0.0), m2 = vec3(0.0);
+    float n = 0.0;
+    for (int y = -1; y <= 1; y++)
+        for (int x = -1; x <= 1; x++) {
+            vec4 s = texelFetch(uCurrent, clamp(px + ivec2(x, y), ivec2(0), ivec2(uScreenSize) - 1), 0);
+            if (s.a < 0.0) continue;
+            vec3 c = toYCoCg(s.rgb);
+            m1 += c; m2 += c * c; n += 1.0;
+        }
+    m1 /= n; m2 /= n;
+    vec3 sigma = sqrt(max(m2 - m1 * m1, vec3(0.0)));
+    float gamma = mix(1.0, 2.5, rough);
+
+    vec4 hist = textureLod(uHistory, uvPrev, 0.0);
+    vec3 histC = fromYCoCg(clipToAABB(m1, gamma * sigma, toYCoCg(hist.rgb)));
+
+    float maxLen = mix(12.0, 48.0, rough);
+    float len = valid ? min(hist.a + 1.0, maxLen) : 1.0;
+    vec3 outC = mix(histC, cur.rgb, 1.0 / len);
+
+    imageStore(uHistoryOut, px, vec4(outC, len));
+    imageStore(uDistOut, px, vec4(length(P)));
+}

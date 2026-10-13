@@ -1,0 +1,47 @@
+// =============================================================================================
+//  GSR — Passe 3 : composition dans la couleur de scène (Fresnel + BRDF d'environnement)
+// =============================================================================================
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#include "gsr_screen.glsl"
+
+layout(binding = 0) uniform sampler2D uDepth;
+layout(binding = 2) uniform sampler2D uReflection;     // historique accumulé (linéaire)
+layout(rgba8, binding = 0) uniform image2D uScene;     // framebuffer principal (lecture/écriture)
+
+// Approximation analytique de la BRDF d'environnement (Karis, "Mobile PBR")
+vec2 envBRDFApprox(float NoV, float rough) {
+    const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
+    const vec4 c1 = vec4( 1.0,  0.0425,  1.04, -0.04);
+    vec4 r = rough * c0 + c1;
+    float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
+    return vec2(-1.04, 1.04) * a004 + r.zw;
+}
+
+void main() {
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(px, ivec2(uScreenSize)))) return;
+    float d = texelFetch(uDepth, px, 0).r;
+    if (d >= 1.0) return;
+
+    vec4 refl = texelFetch(uReflection, px, 0);
+    if (refl.a <= 0.0) return;                         // pas d'historique = pas de reflet
+
+    vec2 uv = (vec2(px) + 0.5) / uScreenSize;
+    vec3 vp = gsrViewPos(uv, d);
+    vec3 nV = gsrViewNormalFromDepth(uDepth, px, vp);
+    vec3 N  = normalize(mat3(uInvView) * nV);
+    float rough, mask;
+    gsrStandaloneMaterial(N, rough, mask);
+    if (mask <= 0.001) return;
+
+    float NoV = clamp(dot(nV, -normalize(vp)), 1e-3, 1.0);
+    const float F0 = 0.02;                             // eau / diélectriques
+    vec2 AB = envBRDFApprox(NoV, rough);
+    float spec = clamp((F0 * AB.x + AB.y) * mask, 0.0, 1.0);
+
+    vec4 scene = imageLoad(uScene, px);
+    vec3 sceneLin = pow(scene.rgb, vec3(2.2));
+    vec3 outLin = sceneLin * (1.0 - spec) + refl.rgb * spec;
+    imageStore(uScene, px, vec4(pow(outLin, vec3(1.0 / 2.2)), scene.a));
+}
