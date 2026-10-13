@@ -1,9 +1,9 @@
 package dev.gsr.core;
 
-/** Destination des pages (implémentée en OpenGL par GsrGpuResources ; en mémoire pour les tests). */
+/** Destination of the pages (implemented with OpenGL by GsrGpuResources; in memory for tests). */
 public interface GpuSink {
-    /** Écrit la page dans son slot : splats, table de cellules, puis méta (pageXYZ, count). */
+    /** Writes the page into its slot: splats, cell table, then meta (pageXYZ, count). */
     void upload(int slotIndex, PageData page);
-    /** Marque le slot invalide (méta = INVALID) : le shader le traitera comme "non construit". */
+    /** Marks the slot invalid (meta = INVALID): the shader will treat it as "not built". */
     void invalidate(int slotIndex);
 }

@@ -3,14 +3,14 @@ package dev.gsr.core;
 import java.util.Arrays;
 
 /**
- * Résumé multi-résolution d'une section (mips 1, 2, 3 -> voxels de 2, 4, 8 blocs).
+ * Multi-resolution summary of a section (mips 1, 2, 3 -> voxels of 2, 4, 8 blocks).
  *
- * C'est la clé du coût des niveaux grossiers : une page L3 couvre 8x8x8 = 512 sections, la reconstruire
- * en relisant 2 millions de blocs serait trop cher. On calcule donc ce résumé UNE fois par reconstruction
- * de section (4096 lectures), puis les pages L1..L3 sont assemblées uniquement à partir des résumés.
+ * This is the key to the cost of the coarse levels: an L3 page covers 8x8x8 = 512 sections, and rebuilding it
+ * by re-reading 2 million blocks would be too expensive. So this summary is computed ONCE per section
+ * rebuild (4096 reads), and the L1..L3 pages are then assembled solely from summaries.
  *
- * Mémoire : (512 + 64 + 8) voxels x 7 octets ≈ 4 Kio par section non vide ; les sections d'air partagent
- * le singleton {@link #EMPTY}.
+ * Memory: (512 + 64 + 8) voxels x 7 bytes ≈ 4 KiB per non-empty section; air sections share
+ * the {@link #EMPTY} singleton.
  */
 public final class SectionSummary {
     public static final int MIPS = 3; // mip m = 1..3
@@ -18,7 +18,7 @@ public final class SectionSummary {
 
     private final boolean empty;
     private final byte[][] kind = new byte[MIPS][];
-    private final int[][] albedo = new int[MIPS][];   // [mip][voxel * FACE_GROUPS + groupe]
+    private final int[][] albedo = new int[MIPS][];   // [mip][voxel * FACE_GROUPS + group]
     private final byte[][] light = new byte[MIPS][];
     private final byte[][] emission = new byte[MIPS][];
     private int hash;
@@ -45,7 +45,7 @@ public final class SectionSummary {
         return empty ? 0 : emission[mip - 1][idx(mipSize(mip), x, y, z)];
     }
 
-    /** Empreinte du contenu : évite de reconstruire les pages grossières si rien n'a changé à leur échelle. */
+    /** Content fingerprint: avoids rebuilding coarse pages if nothing changed at their scale. */
     public int contentHash() { return hash; }
 
     private static boolean exposed(int k, int nk) {
@@ -56,7 +56,7 @@ public final class SectionSummary {
         if (src == VoxelSource.EMPTY) return EMPTY;
         final int G = GsrLayout.FACE_GROUPS;
         int[] a = new int[G];
-        // Accumulateurs par mip
+        // Per-mip accumulators
         int[][] opaque = new int[MIPS][], transl = new int[MIPS][];
         long[][] surfRGBA = new long[MIPS][], allRGBA = new long[MIPS][];
         int[][] surfN = new int[MIPS][], allN = new int[MIPS][];

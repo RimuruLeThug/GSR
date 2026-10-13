@@ -10,7 +10,7 @@ import java.util.regex.Pattern;
 
 import static org.lwjgl.opengl.GL43C.*;
 
-/** Charge les compute shaders depuis assets/gsr/shaders, résout les #include et injecte les #define. */
+/** Loads the compute shaders from assets/gsr/shaders, resolves #include and injects #define. */
 public final class GsrShaderLoader {
     private static final String ROOT = "/assets/gsr/shaders/";
     private static final Pattern INCLUDE = Pattern.compile("^\\s*#include\\s+\"([^\"]+)\"\\s*$", Pattern.MULTILINE);
@@ -49,7 +49,7 @@ public final class GsrShaderLoader {
         if (glGetShaderi(sh, GL_COMPILE_STATUS) == GL_FALSE) {
             String log = glGetShaderInfoLog(sh);
             glDeleteShader(sh);
-            throw new IllegalStateException("Compilation de " + name + " échouée :\n" + log);
+            throw new IllegalStateException("Compilation of " + name + " failed:\n" + log);
         }
         int prog = glCreateProgram();
         glAttachShader(prog, sh);
@@ -58,7 +58,7 @@ public final class GsrShaderLoader {
         if (glGetProgrami(prog, GL_LINK_STATUS) == GL_FALSE) {
             String log = glGetProgramInfoLog(prog);
             glDeleteProgram(prog);
-            throw new IllegalStateException("Édition de liens de " + name + " échouée :\n" + log);
+            throw new IllegalStateException("Linking of " + name + " failed:\n" + log);
         }
         return prog;
     }

@@ -17,20 +17,20 @@ import net.minecraft.world.chunk.PalettedContainer;
 import net.minecraft.world.chunk.WorldChunk;
 
 /**
- * Capture d'une section + ses 6 voisines de face, sur le thread principal.
+ * Capture of a section + its 6 face neighbors, on the main thread.
  *
- * On COPIE les PalettedContainer et les ChunkNibbleArray (quelques Kio) : les workers lisent ensuite
- * des données figées, sans jamais toucher au monde vivant ni à ses verrous. C'est le même principe
- * que les ChunkRendererRegion vanilla / les sections clonées de Sodium.
+ * We COPY the PalettedContainers and ChunkNibbleArrays (a few KiB): the workers then read
+ * frozen data, never touching the live world or its locks. This is the same principle
+ * as vanilla's ChunkRendererRegion / Sodium's cloned sections.
  *
- * Teinte de biome : si la section contient des blocs teintés (herbe, feuillage, eau), on lit la couleur
- * du biome (déjà lissée par le « biome blend » vanilla) sur une grille 4×4 de colonnes, au centre de
- * chaque carré de 4×4 blocs (la résolution des biomes), à mi-hauteur de la section, puis on
- * l'interpole bilinéairement par colonne. 16 lectures par type au lieu de 256.
+ * Biome tint: if the section contains tinted blocks (grass, foliage, water), the biome color
+ * (already smoothed by vanilla's "biome blend") is read on a 4×4 grid of columns, at the center of
+ * each 4×4-block square (the biome resolution), at mid-height of the section, then
+ * bilinearly interpolated per column. 16 reads per type instead of 256.
  */
 public final class McSnapshotSource implements SectionSnapshotSource {
     private final ClientWorld world;
-    private BlockMaterialTable materials; // lue et remplacée sur le thread client uniquement (capture)
+    private BlockMaterialTable materials; // read and replaced on the client thread only (capture)
     private final BlockPos.Mutable cursor = new BlockPos.Mutable();
 
     public McSnapshotSource(ClientWorld world, BlockMaterialTable materials) {
@@ -38,10 +38,10 @@ public final class McSnapshotSource implements SectionSnapshotSource {
         this.materials = materials;
     }
 
-    /** Pack de ressources changé : les captures suivantes utilisent la nouvelle table. */
+    /** Resource pack changed: subsequent captures use the new table. */
     public void setMaterials(BlockMaterialTable materials) { this.materials = materials; }
 
-    // ordre : centre, puis GsrLayout.DIRS (-X +X -Y +Y -Z +Z)
+    // order: center, then GsrLayout.DIRS (-X +X -Y +Y -Z +Z)
     private static final int[][] OFFS = {{0, 0, 0}, {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}};
     private static final ColorResolver[] RESOLVERS = {null, BiomeColors.GRASS_COLOR, BiomeColors.FOLIAGE_COLOR, BiomeColors.WATER_COLOR};
 
@@ -80,12 +80,12 @@ public final class McSnapshotSource implements SectionSnapshotSource {
         return new Snapshot(materials, states, sky, blk, belowWorld, hasSky, sampleTints(center, sx, sy, sz));
     }
 
-    /** Teintes par type (index TINT_*), 16×16 colonnes 0xRRGGBB, ou null pour un type absent de la section. */
+    /** Tints per type (index TINT_*), 16×16 columns 0xRRGGBB, or null for a type absent from the section. */
     private int[][] sampleTints(ChunkSection center, int sx, int sy, int sz) {
         int[] mask = new int[1];
         center.getBlockStateContainer().hasAny(st -> {
             mask[0] |= 1 << materials.tintType(Block.getRawIdFromState(st));
-            return false;   // parcourt toute la palette
+            return false;   // walks the whole palette
         });
         int[][] out = new int[4][];
         int[] grid = new int[16];
@@ -105,7 +105,7 @@ public final class McSnapshotSource implements SectionSnapshotSource {
         return out;
     }
 
-    /** Interpolation entre les centres d'échantillons (x = 2, 6, 10, 14), bornée aux bords. */
+    /** Interpolation between sample centers (x = 2, 6, 10, 14), clamped at the edges. */
     private static int bilinear(int[] grid, int x, int z) {
         float fx = Math.max(0f, Math.min(3f, (x - 2f) / 4f)), fz = Math.max(0f, Math.min(3f, (z - 2f) / 4f));
         int x0 = Math.min(2, (int) fx), z0 = Math.min(2, (int) fz);
@@ -120,7 +120,7 @@ public final class McSnapshotSource implements SectionSnapshotSource {
         return out;
     }
 
-    /** Snapshot immuable, lisible depuis n'importe quel thread. */
+    /** Immutable snapshot, readable from any thread. */
     private record Snapshot(BlockMaterialTable mat, PalettedContainer<BlockState>[] states,
                             ChunkNibbleArray[] sky, ChunkNibbleArray[] blk, boolean[] belowWorld,
                             boolean hasSky, int[][] tints) implements VoxelSource {
@@ -139,7 +139,7 @@ public final class McSnapshotSource implements SectionSnapshotSource {
 
         @Override public int kind(int x, int y, int z) {
             int i = which(x, y, z);
-            if (belowWorld[i]) return GsrLayout.KIND_OPAQUE;   // pas de faces sous la bedrock
+            if (belowWorld[i]) return GsrLayout.KIND_OPAQUE;   // no faces below bedrock
             int id = rawId(i, x, y, z);
             return id < 0 ? GsrLayout.KIND_AIR : mat.kind(id);
         }
@@ -148,7 +148,7 @@ public final class McSnapshotSource implements SectionSnapshotSource {
             int id = rawId(which(x, y, z), x, y, z);
             if (id < 0) return 0;
             int[] t = tints[mat.tintType(id)];
-            if (t == null) return mat.albedo(id, faceGroup);   // non teinté, ou voisin d'un type absent de la section
+            if (t == null) return mat.albedo(id, faceGroup);   // untinted, or neighbor of a type absent from the section
             int cx = Math.max(0, Math.min(15, x)), cz = Math.max(0, Math.min(15, z));
             return mat.albedo(id, faceGroup, t[cx + 16 * cz]);
         }

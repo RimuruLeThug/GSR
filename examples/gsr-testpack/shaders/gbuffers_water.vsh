@@ -1,5 +1,5 @@
 #version 120
-// Pack de test GSR : eau dessinée comme en vanilla, plus un masque dans colortex2.
+// GSR test pack: water drawn as in vanilla, plus a mask in colortex2.
 varying vec2 texcoord;
 varying vec2 lmcoord;
 varying vec4 glcolor;

@@ -1,21 +1,21 @@
 // =============================================================================================
-//  GSR — Passe 3 : composition dans la couleur de scène (Fresnel + BRDF d'environnement)
+//  GSR — Pass 3: composition into the scene color (Fresnel + environment BRDF)
 // =============================================================================================
 layout(local_size_x = 8, local_size_y = 8) in;
 
 #include "gsr_screen.glsl"
 
 layout(binding = 0) uniform sampler2D uDepth;
-layout(binding = 2) uniform sampler2D uReflection;     // historique accumulé (linéaire, basse résolution)
-layout(binding = 4) uniform sampler2D uReflDist;       // distance caméra du pixel représentatif (1e9 = vide)
-layout(rgba8, binding = 0) uniform image2D uScene;     // framebuffer principal (lecture/écriture)
-uniform int uDebugView;                                // 3 : GSR brut (sans Fresnel), 4 : codes d'impact bruts, 5 : reflet hybride brut
+layout(binding = 2) uniform sampler2D uReflection;     // accumulated history (linear, low resolution)
+layout(binding = 4) uniform sampler2D uReflDist;       // camera distance of the representative pixel (1e9 = empty)
+layout(rgba8, binding = 0) uniform image2D uScene;     // main framebuffer (read/write)
+uniform int uDebugView;                                // 3: raw GSR (no Fresnel), 4: raw hit codes, 5: raw hybrid reflection
 
 /*
- * Upsampling guidé par la profondeur : les 4 texels basse résolution autour du pixel, pondérés
- * bilinéairement × similarité de distance caméra (une silhouette ne bave pas sur l'arrière-plan).
- * Le petit plancher bilinéaire fait qu'un pixel isolé prend, à défaut, le texel de distance la plus
- * proche. En pleine résolution (uResScale = 1), revient exactement à lire le texel du pixel.
+ * Depth-guided upsampling: the 4 low-resolution texels around the pixel, weighted
+ * bilinearly × camera-distance similarity (a silhouette does not bleed onto the background).
+ * The small bilinear floor makes an isolated pixel fall back to the texel with the closest
+ * distance. At full resolution (uResScale = 1), it is exactly a read of the pixel's texel.
  */
 vec4 upsampleReflection(ivec2 px, float dist) {
     ivec2 lowMax = gsrLowResSize() - 1;
@@ -37,7 +37,7 @@ vec4 upsampleReflection(ivec2 px, float dist) {
     return wsum > 1e-30 ? acc / wsum : vec4(0.0);
 }
 
-// Approximation analytique de la BRDF d'environnement (Karis, "Mobile PBR")
+// Analytic approximation of the environment BRDF (Karis, "Mobile PBR")
 vec2 envBRDFApprox(float NoV, float rough) {
     const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
     const vec4 c1 = vec4( 1.0,  0.0425,  1.04, -0.04);
@@ -51,7 +51,7 @@ void main() {
     if (any(greaterThanEqual(px, ivec2(uScreenSize)))) return;
     float d = texelFetch(uDepth, px, 0).r;
     if (d >= 1.0) return;
-    if (uFloorStrength <= 0.0 && gsrTranslucentMask(px, d) == 0.0) return;   // test bon marché
+    if (uFloorStrength <= 0.0 && gsrTranslucentMask(px, d) == 0.0) return;   // cheap test
 
     vec2 uv = (vec2(px) + 0.5) / uScreenSize;
     vec3 vp = gsrViewPos(uv, d);
@@ -62,16 +62,16 @@ void main() {
     if (mask <= 0.001) return;
 
     vec4 refl = upsampleReflection(px, length(vp));
-    if (refl.a <= 0.0) return;                         // pas d'historique = pas de reflet
+    if (refl.a <= 0.0) return;                         // no history = no reflection
 
     float NoV = clamp(dot(nV, -normalize(vp)), 1e-3, 1.0);
-    const float F0 = 0.02;                             // eau / diélectriques
+    const float F0 = 0.02;                             // water / dielectrics
     vec2 AB = envBRDFApprox(NoV, rough);
     float spec = clamp((F0 * AB.x + AB.y) * mask, 0.0, 1.0);
 
-    // Compression douce des hautes lumières (le framebuffer est en 8 bits, sans tone mapping) :
-    // linéaire jusqu'à une luminance K, logarithmique au-delà -> plus de disque blanc saturé.
-    // K = 8 : l'eau vue de haut ne réfléchit que ~3 % (Fresnel), il faut ~10-20 pour un reflet franc.
+    // Soft highlight compression (the framebuffer is 8-bit, with no tone mapping):
+    // linear up to a luminance K, logarithmic beyond -> no more saturated white disc.
+    // K = 8: water seen from above reflects only ~3 % (Fresnel), ~10-20 is needed for a clear reflection.
     const float K = 8.0;
     float lum = dot(refl.rgb, vec3(0.2126, 0.7152, 0.0722));
     vec3 reflC = lum > K ? refl.rgb * (K * (1.0 + log(lum / K)) / lum) : refl.rgb;

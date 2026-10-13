@@ -1,10 +1,10 @@
 // =============================================================================================
-//  GSR — Gaussian Space Reflections : bibliothèque partagée
-//  Inclus par gsr_reflect.comp (mode autonome) ET par les shaderpacks Iris (docs/IRIS_INTEGRATION.md).
-//  Requiert GLSL 4.30 (SSBO). Miroir CPU exact : dev.gsr.core.CpuReferenceTracer (testé).
+//  GSR — Gaussian Space Reflections : shared library
+//  Included by gsr_reflect.comp (standalone mode) AND by Iris shaderpacks (docs/IRIS_INTEGRATION.md).
+//  Requires GLSL 4.30 (SSBO). Exact CPU mirror: dev.gsr.core.CpuReferenceTracer (tested).
 //
-//  Espace de travail : "relatif caméra, non tourné" (P_monde = camBlock + camFrac + P),
-//  identique au rendu vanilla et à l'espace "player" d'Iris.
+//  Working space: "camera-relative, unrotated" (P_world = camBlock + camFrac + P),
+//  identical to vanilla rendering and to Iris's "player" space.
 // =============================================================================================
 #ifndef GSR_COMMON_GLSL
 #define GSR_COMMON_GLSL
@@ -21,24 +21,24 @@
 #define GSR_MAX_STEPS 160
 #endif
 #define GSR_MIN_TRANSMITTANCE 0.02
-// Gain de saturation : noyau "à sommet plat" min(1, g·e^(−m²/2)). Une surface pleine pavée de
-// surfels devient réellement opaque, sans gonfler σ (ce qui épaissirait les silhouettes).
+// Saturation gain: "flat-top" kernel min(1, g·e^(−m²/2)). A solid surface tiled with surfels
+// becomes truly opaque without inflating σ (which would thicken silhouettes).
 #ifndef GSR_ALPHA_GAIN
 #define GSR_ALPHA_GAIN 1.6
 #endif
-// Découpe des surfels au carré de leur face (demi-côté = ½ voxel), fondu sur cette fraction de voxel.
-// Sans elle, le disque (opaque jusqu'à ~0,53 voxel du centre, encore ~55 % à 0,8) débordait de sa face :
-// le flanc immergé d'un bloc de rive masquait au-dessus de l'eau les touffes et talus (reflet marron).
+// Clipping of surfels to the square of their face (half-side = ½ voxel), faded over this fraction of a voxel.
+// Without it, the disc (opaque out to ~0.53 voxel from the center, still ~55 % at 0.8) spilled past its face:
+// the submerged flank of a shore block hid the tufts and banks above the water (brown reflection).
 #define GSR_EDGE_SOFT 0.15
-// Plantes en croix (bit 30) : une face pleine se reflétait comme un cube vert translucide. Chaque face
-// latérale est découpée en GSR_TUFT_BLADES brins verticaux de hauteurs pseudo-aléatoires (fixes par
-// splat), pleins en bas et fondus en haut ; l'opacité est relevée de GSR_TUFT_GAIN pour garder en
-// moyenne la couverture de la texture. Miroir : CpuReferenceTracer#tuft.
+// Cross-shaped plants (bit 30): a full face reflected as a translucent green cube. Each side face
+// is cut into GSR_TUFT_BLADES vertical blades of pseudo-random heights (fixed per splat), solid
+// at the bottom and fading at the top; opacity is raised by GSR_TUFT_GAIN to keep the texture's
+// average coverage. Mirror: CpuReferenceTracer#tuft.
 #define GSR_TUFT_BLADES 4.0
 #define GSR_TUFT_GAIN 1.7
 uint gsrHash(uint h) { h ^= h >> 16u; h *= 0x7feb352du; h ^= h >> 15u; h *= 0x846ca68bu; h ^= h >> 16u; return h; }
 float gsrTuft(vec3 q, vec3 n, vec3 pos, float vs) {
-    if (abs(n.y) > 0.5) return 1.0;                                // dessus / dessous : inchangés
+    if (abs(n.y) > 0.5) return 1.0;                                // top / bottom: unchanged
     float h01 = clamp((abs(n.x) > 0.5 ? q.z : q.x) / vs + 0.5, 0.0, 0.999);
     float v01 = q.y / vs + 0.5;
     uint seed = (floatBitsToUint(pos.x) * 73856093u) ^ (floatBitsToUint(pos.y) * 19349663u) ^ (floatBitsToUint(pos.z) * 83492791u);
@@ -47,26 +47,26 @@ float gsrTuft(vec3 q, vec3 n, vec3 pos, float vs) {
 }
 
 struct GsrFrame {
-    ivec4 camBlock;                    // xyz bloc caméra, w index de frame
-    vec4  camFrac;                     // xyz fraction,    w nombre de niveaux
-    ivec4 pageDims;                    // xyz pages/niveau, w slots/niveau
-    ivec4 windowMin[GSR_MAX_LEVELS];   // coin min de chaque fenêtre (coord. de page)
-    ivec4 iparams;                     // x maxSplatsPerPage, y bit 0 = ignorer le masque de briques (debug)
-    vec4  sunDir;                      // xyz, w intensité du ciel
+    ivec4 camBlock;                    // xyz camera block, w frame index
+    vec4  camFrac;                     // xyz fraction,    w level count
+    ivec4 pageDims;                    // xyz pages/level, w slots/level
+    ivec4 windowMin[GSR_MAX_LEVELS];   // min corner of each window (page coords)
+    ivec4 iparams;                     // x maxSplatsPerPage, y bit 0 = ignore the brick mask (debug)
+    vec4  sunDir;                      // xyz, w sky intensity
     vec4  sunColor;
     vec4  skyZenith;
     vec4  skyHorizon;
-    vec4  blockLight;                  // rgb, w force d'émission
+    vec4  blockLight;                  // rgb, w emission strength
 };
 
 struct GsrPageMeta {
-    ivec4 page;        // xyz coord. de page, w nombre de splats
-    uvec4 mask;        // xy masque 64 bits des briques (2³ cellules = 4³ voxels) non vides, zw réservés
+    ivec4 page;        // xyz page coord, w splat count
+    uvec4 mask;        // xy 64-bit mask of non-empty bricks (2³ cells = 4³ voxels), zw reserved
 };
 
 struct GsrSplat {
-    vec4  posSigmaT;   // xyz relatif à l'origine de la page (blocs), w = σ tangentiel
-    uvec4 data;        // x albédo 0xAARRGGBB | y normale(16) lumière(8) émission(4) niveau(2) | z bits(σ normal) | w réservé
+    vec4  posSigmaT;   // xyz relative to the page origin (blocks), w = tangential σ
+    uvec4 data;        // x albedo 0xAARRGGBB | y normal(16) light(8) emission(4) level(2) | z bits(normal σ) | w reserved
 };
 
 layout(std430, binding = GSR_BINDING_FRAME)  readonly buffer GsrFrameBuffer { GsrFrame gsrFrame; };
@@ -74,7 +74,7 @@ layout(std430, binding = GSR_BINDING_META)   readonly buffer GsrMetaBuffer  { Gs
 layout(std430, binding = GSR_BINDING_CELLS)  readonly buffer GsrCellBuffer  { uint     gsrCells[]; };
 layout(std430, binding = GSR_BINDING_SPLATS) readonly buffer GsrSplatBuffer { GsrSplat gsrSplats[]; };
 
-// ------------------------------------------------------------------------------- utilitaires
+// ------------------------------------------------------------------------------- utilities
 
 vec3 gsrOctDecode(uint p) {
     vec2 e = vec2(float(p & 0xFFu), float((p >> 8u) & 0xFFu)) / 255.0 * 2.0 - 1.0;
@@ -92,14 +92,14 @@ vec4 gsrUnpackRGBA(uint c) {
 
 ivec3 gsrFloorMod(ivec3 a, ivec3 m) { return a - m * ivec3(floor(vec3(a) / vec3(m))); }
 
-// Miroir de GaussianClipmap.slotIndex()
+// Mirror of GaussianClipmap.slotIndex()
 int gsrSlotIndex(int level, ivec3 page) {
     ivec3 d = gsrFrame.pageDims.xyz;
     ivec3 s = gsrFloorMod(page, d);
     return level * gsrFrame.pageDims.w + s.x + d.x * (s.y + d.y * s.z);
 }
 
-// Bloc entier (monde) -> espace relatif caméra, sans jamais convertir de grands entiers en float.
+// Integer (world) block -> camera-relative space, never converting large integers to float.
 vec3 gsrToRel(ivec3 blockPos) { return vec3(blockPos - gsrFrame.camBlock.xyz) - gsrFrame.camFrac.xyz; }
 
 vec3 gsrSafeInv(vec3 d) {
@@ -108,23 +108,23 @@ vec3 gsrSafeInv(vec3 d) {
                       d.z >= 0.0 ? max(d.z, 1e-6) : min(d.z, -1e-6));
 }
 
-// Ciel analytique (repli final). Linéaire.
+// Analytic sky (final fallback). Linear.
 vec3 gsrSkyRadiance(vec3 dir) {
     float h = clamp(dir.y, 0.0, 1.0);
     vec3 sky = mix(gsrFrame.skyHorizon.rgb, gsrFrame.skyZenith.rgb, sqrt(h)) * gsrFrame.sunDir.w;
     float sd = max(dot(dir, gsrFrame.sunDir.xyz), 0.0);
-    // Disque ~1,2° de demi-largeur, pic ≈ 20 × sunColor + halo discret. Réglé en jeu : 800/×30 donnait
-    // un rond blanc aveuglant de ~2,4°, 4000/×8 un reflet terne. La composition compresse au-delà de 8.
+    // Disc ~1.2° half-width, peak ≈ 20 × sunColor + subtle halo. Tuned in game: 800/×30 gave
+    // a blinding white disc of ~2.4°, 4000/×8 a dull reflection. Compositing compresses above 8.
     sky += gsrFrame.sunColor.rgb * (pow(sd, 3000.0) * 20.0 + pow(sd, 16.0) * 0.12) * gsrFrame.sunDir.w;
     if (dir.y < 0.0) sky *= mix(1.0, 0.3, clamp(-dir.y * 4.0, 0.0, 1.0));
     return sky;
 }
 
-// Éclairage d'un splat : dynamique (heure du jour) SANS reconstruire les splats.
-// Par défaut, imitation de l'éclairage vanilla (lightmap + ombrage fixe par face, calcul en sRGB) :
-// le reflet GSR doit se raccorder sans couture au SSR, qui reflète l'image vanilla. L'ancien modèle
-// « physique » (soleil directionnel ×2,2) rendait les collines deux fois trop claires (vu en jeu).
-// Un shaderpack peut définir GSR_SHADE_PHYSICAL pour éclairer avec son propre soleil.
+// Splat lighting: dynamic (time of day) WITHOUT rebuilding the splats.
+// By default, imitates vanilla lighting (lightmap + fixed per-face shading, computed in sRGB):
+// the GSR reflection must blend seamlessly with SSR, which reflects the vanilla image. The former
+// "physical" model (directional sun ×2.2) made hills twice too bright (seen in game).
+// A shaderpack can define GSR_SHADE_PHYSICAL to light with its own sun.
 #ifndef GSR_SHADE_PHYSICAL
 float gsrVanillaBrightness(float level) { float f = level / 15.0; return f / (4.0 - 3.0 * f); }
 
@@ -134,12 +134,12 @@ vec3 gsrShadeSplat(vec3 albedoSrgb, vec3 n, uint data) {
     float em  = float((data >> 24u) & 0xFu) / 15.0;
     vec3  l   = vec3(gsrVanillaBrightness(sky) * gsrFrame.sunDir.w) + gsrVanillaBrightness(blk) * gsrFrame.blockLight.rgb;
     l = clamp(l, 0.0, 1.0);
-    l = mix(l, 1.0 - pow(1.0 - l, vec3(4.0)), 0.5);           // option « Luminosité » par défaut (50 %)
-    l = max(l, vec3(em));                                      // blocs lumineux : pleinement éclairés
-    // Ombrage fixe vanilla : dessus 1,0, dessous 0,5, nord/sud 0,8, est/ouest 0,6
+    l = mix(l, 1.0 - pow(1.0 - l, vec3(4.0)), 0.5);           // default "Brightness" option (50 %)
+    l = max(l, vec3(em));                                      // light-emitting blocks: fully lit
+    // Vanilla fixed shading: top 1.0, bottom 0.5, north/south 0.8, east/west 0.6
     vec3 n2 = n * n;
     float shade = 0.6 * n2.x + 0.8 * n2.z + (n.y > 0.0 ? 1.0 : 0.5) * n2.y;
-    if ((data & (1u << 30u)) != 0u) shade = 1.0;              // plantes en croix : « shade »: false
+    if ((data & (1u << 30u)) != 0u) shade = 1.0;              // cross-shaped plants: "shade": false
     return pow(albedoSrgb * l * shade, vec3(2.2));
 }
 #else
@@ -156,31 +156,31 @@ vec3 gsrShadeSplat(vec3 albedoSrgb, vec3 n, uint data) {
 }
 #endif
 
-// ------------------------------------------------------------------------------- traversée
+// ------------------------------------------------------------------------------- traversal
 
 struct GsrHit {
-    vec3  radiance;       // radiance linéaire accumulée (ciel NON inclus)
-    float transmittance;  // 1 = rien touché ; le ciel doit être pondéré par cette valeur
-    float hitDist;        // distance moyenne pondérée par l'opacité (reprojection temporelle)
-    int   level;          // niveau de clipmap du premier impact (-1 si aucun)
+    vec3  radiance;       // accumulated linear radiance (sky NOT included)
+    float transmittance;  // 1 = nothing hit; the sky must be weighted by this value
+    float hitDist;        // opacity-weighted mean distance (temporal reprojection)
+    int   level;          // clipmap level of the first hit (-1 if none)
 };
 
 /*
- * Cône-marche dans la clipmap gaussienne.
- *  ro, rd    : origine relative caméra, direction NORMALISÉE
- *  coneTan   : demi-angle du cône (rugosité) -> choix du niveau de détail
- *  coneBase  : empreinte initiale (blocs)
+ * Cone-march through the Gaussian clipmap.
+ *  ro, rd    : camera-relative origin, NORMALIZED direction
+ *  coneTan   : cone half-angle (roughness) -> level-of-detail selection
+ *  coneBase  : initial footprint (blocks)
  *
- * À chaque pas : niveau L = le plus fin dont le voxel (2^L) couvre l'empreinte du cône ET dont
- * la fenêtre contient le point. On évalue les splats de la cellule courante, puis on saute à la
- * sortie de la cellule, de la brique 4³ si son bit de masque est nul (sans lire gsrCells), ou de
- * toute la page si elle est vide / pas encore construite.
+ * At each step: level L = the finest whose voxel (2^L) covers the cone footprint AND whose
+ * window contains the point. The splats of the current cell are evaluated, then we jump to the
+ * cell exit, to the exit of the 4³ brick if its mask bit is zero (without reading gsrCells), or to
+ * the exit of the whole page if it is empty / not built yet.
  *
- * Évaluation analytique d'une gaussienne 3D le long du rayon, Σ⁻¹ = a·I + b·nnᵀ
- * (a = 1/σt², b = 1/σn² − 1/σt²) :
- *   t* = −(dᵀΣ⁻¹o)/(dᵀΣ⁻¹d),  m² = oᵀΣ⁻¹o − (dᵀΣ⁻¹o)²/(dᵀΣ⁻¹d),  α = opacité · min(1, gain·exp(−m²/2))
- * Dans une cellule les splats sont composés sans tri (moyenne pondérée α, transmittance Π(1−α)) ;
- * entre cellules l'ordre avant -> arrière est exact grâce au DDA.
+ * Analytic evaluation of a 3D Gaussian along the ray, Σ⁻¹ = a·I + b·nnᵀ
+ * (a = 1/σt², b = 1/σn² − 1/σt²):
+ *   t* = −(dᵀΣ⁻¹o)/(dᵀΣ⁻¹d),  m² = oᵀΣ⁻¹o − (dᵀΣ⁻¹o)²/(dᵀΣ⁻¹d),  α = opacity · min(1, gain·exp(−m²/2))
+ * Within a cell the splats are composited without sorting (α-weighted mean, transmittance Π(1−α));
+ * between cells the front -> back order is exact thanks to the DDA.
  */
 GsrHit gsrTrace(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float coneBase) {
     GsrHit h;
@@ -202,12 +202,12 @@ GsrHit gsrTrace(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float c
         ivec3 voxel = ivec3(0), page = ivec3(0);
         bool covered = false;
         for (; L < levels; L++) {
-            voxel = blk >> L;                  // décalage arithmétique = floorDiv
+            voxel = blk >> L;                  // arithmetic shift = floorDiv
             page  = voxel >> 4;
             ivec3 rel = page - gsrFrame.windowMin[L].xyz;
             if (all(greaterThanEqual(rel, ivec3(0))) && all(lessThan(rel, gsrFrame.pageDims.xyz))) { covered = true; break; }
         }
-        if (!covered) break;                   // sorti de la clipmap -> le ciel prend le relais
+        if (!covered) break;                   // left the clipmap -> the sky takes over
 
         int   slot = gsrSlotIndex(L, page);
         GsrPageMeta meta = gsrPageMeta[slot];
@@ -219,15 +219,15 @@ GsrHit gsrTrace(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float c
         uint  bits  = bi < 32 ? meta.mask.x : meta.mask.y;
         bool  occupied = valid && (noMask || ((bits >> uint(bi & 31)) & 1u) != 0u);
 
-        // Boîte à franchir : cellule (brique occupée), brique vide (4³ voxels) ou page entière.
+        // Box to cross: cell (occupied brick), empty brick (4³ voxels) or whole page.
         ivec3 boxMin = occupied ? (page * 16 + cell * 2) * vs : valid ? (page * 16 + brick * 4) * vs : page * 16 * vs;
         float boxSize = float(occupied ? 2 * vs : valid ? 4 * vs : 16 * vs);
         vec3  bmin = gsrToRel(boxMin);
         vec3  t0 = (bmin - ro) * invD, t1 = (bmin + boxSize - ro) * invD;
         vec3  tf = max(t0, t1);
         float tExit = min(min(tf.x, tf.y), tf.z);
-        // Un saut à vide ne franchit pas la distance où l'empreinte du cône dépasse 2^L : au-delà, le
-        // niveau L+1 doit être consulté, et il peut avoir du contenu dans la zone sautée.
+        // An empty skip does not cross the distance where the cone footprint exceeds 2^L: beyond it,
+        // level L+1 must be consulted, and it may have content in the skipped zone.
         if (!occupied && coneTan > 0.0) tExit = min(tExit, max((float(vs) - coneBase) / coneTan, t));
 
         if (occupied) {
@@ -242,7 +242,7 @@ GsrHit gsrTrace(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float c
                     GsrSplat s = gsrSplats[base + k];
                     vec3  n  = gsrOctDecode(s.data.y);
                     float dn = dot(rd, n);
-                    if (dn >= 0.0) continue;                       // surfels à sens unique
+                    if (dn >= 0.0) continue;                       // one-sided surfels
                     vec3  o  = ro - (pageOrigin + s.posSigmaT.xyz);
                     float st = s.posSigmaT.w, sn = uintBitsToFloat(s.data.z);
                     float a  = 1.0 / (st * st), b = 1.0 / (sn * sn) - a;
@@ -253,8 +253,8 @@ GsrHit gsrTrace(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float c
                     if (ts < tMin || ts < t - 2.0 * st || ts > tExit + 2.0 * st) continue;
                     float m2 = a * dot(o, o) + b * on * on - dSo * dSo / dSd;
                     vec4  col = gsrUnpackRGBA(s.data.x);
-                    vec3  q  = o + rd * ts;                        // point du rayon, relatif au centre
-                    vec3  qt = abs(q - n * dot(q, n));             // faces alignées sur les axes
+                    vec3  q  = o + rd * ts;                        // ray point, relative to the center
+                    vec3  qt = abs(q - n * dot(q, n));             // axis-aligned faces
                     float e  = max(qt.x, max(qt.y, qt.z));
                     float edge = 1.0 - smoothstep(0.5 * float(vs), (0.5 + GSR_EDGE_SOFT) * float(vs), e);
                     if ((s.data.y & (1u << 30u)) != 0u) {
@@ -283,7 +283,7 @@ GsrHit gsrTrace(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float c
     return h;
 }
 
-// Raccourci : GSR + ciel pondéré par la transmittance. skyVisibility ∈ [0,1] (lumière du ciel au récepteur).
+// Shortcut: GSR + sky weighted by transmittance. skyVisibility ∈ [0,1] (sky light at the receiver).
 vec3 gsrTraceWithSky(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float skyVisibility, out float hitDist) {
     GsrHit h = gsrTrace(ro, rd, tMin, tMax, coneTan, 0.0);
     hitDist = h.hitDist;

@@ -4,11 +4,11 @@ import java.io.File;
 import java.util.Arrays;
 
 /**
- * Mesure des « vagues erratiques » sur une rafale caméra EN MOUVEMENT régulier (-PgsrMove).
- * Pour un mouvement lent et uniforme, chaque frame ≈ moyenne de ses deux voisines ; l'écart
- * |f(k) − (f(k−1) + f(k+1)) / 2| mesure ce qui saute d'une frame à l'autre au lieu de glisser.
- * Usage : java tools/JerkDiff.java <yMin 0..1> frame_0.png frame_1.png ...   (yMin : haut de la zone d'eau)
- * Affiche l'écart moyen (luminance 0..255) et la part de pixels au-dessus de 8 et 24.
+ * Measures "erratic waves" on a burst with a steadily MOVING camera (-PgsrMove).
+ * For slow, uniform motion, each frame ≈ the mean of its two neighbors; the difference
+ * |f(k) − (f(k−1) + f(k+1)) / 2| measures what jumps from one frame to the next instead of gliding.
+ * Usage: java tools/JerkDiff.java <yMin 0..1> frame_0.png frame_1.png ...   (yMin: top of the water zone)
+ * Prints the mean difference (luminance 0..255) and the share of pixels above 8 and 24.
  */
 public class JerkDiff {
     public static void main(String[] args) throws Exception {
@@ -36,7 +36,7 @@ public class JerkDiff {
                 if (j > 8) over8++;
                 if (j > 24) over24++;
             }
-        // Carte de chaleur : gris = première frame, rouge = à-coup maximal sur la rafale.
+        // Heat map: gray = first frame, red = maximum jerk over the burst.
         float[] mx = new float[w * h];
         for (int k = 1; k + 1 < f.length; k++)
             for (int i = 0; i < w * h; i++) mx[i] = Math.max(mx[i], Math.abs(f[k][i] - 0.5f * (f[k - 1][i] + f[k + 1][i])));
@@ -46,7 +46,7 @@ public class JerkDiff {
             heat.setRGB(i % w, i / w, (r << 16) | (g << 8) | g);
         }
         ImageIO.write(heat, "png", new File(files[0].replace(".png", "_jerk_heat.png")));
-        System.out.printf("%-40s à-coup moyen %.2f   > 8 : %.2f %%   > 24 : %.3f %%%n",
+        System.out.printf("%-40s mean jerk %.2f   > 8: %.2f %%   > 24: %.3f %%%n",
                 new File(files[0]).getName(), sum / n, 100.0 * over8 / n, 100.0 * over24 / n);
     }
 

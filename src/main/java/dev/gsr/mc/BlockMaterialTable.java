@@ -34,26 +34,26 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Table précalculée BlockState -> (genre, albédo par groupe de faces, émission), indexée par l'ID brut.
- * Construite une fois sur le thread principal (modèles cuits, registres gelés), puis lue sans verrou
- * par les workers.
+ * Precomputed table BlockState -> (kind, albedo per face group, emission), indexed by raw ID.
+ * Built once on the main thread (baked models, frozen registries), then read lock-free
+ * by the workers.
  *
- * Albédo : moyenne réelle des textures du modèle, face par face (dessus / dessous / côtés), teinte par
- * défaut incluse (herbe, feuillage). Un bloc d'herbe est donc vert dessus et terre sur les côtés, comme
- * à l'écran : sans cela, le reflet GSR d'une colline était entièrement vert et ne se raccordait pas au
- * SSR (bande verte au bord de l'écran). Repli sur MapColor si le modèle n'a pas de quads (fluides...).
+ * Albedo: real average of the model's textures, face by face (top / bottom / sides), default tint
+ * included (grass, foliage). A grass block is therefore green on top and dirt on the sides, as
+ * on screen: without this, the GSR reflection of a hill was entirely green and did not match the
+ * SSR (green band at the screen edge). Falls back to MapColor if the model has no quads (fluids...).
  *
- * Teinte de biome : la superposition des quads est affine en la teinte, donc chaque groupe de faces
- * s'écrit couleur = A + B ⊙ teinte / 255 (A = partie non teintée, B = texture des quads teintés). La
- * table stocke A, B et le type de teinte (herbe, feuillage, eau) ; le snapshot fournit la teinte du
- * biome à la position du bloc. Les teintes constantes (bouleau, épicéa, redstone) sont figées dans A.
+ * Biome tint: the overlay of the quads is affine in the tint, so each face group is
+ * written color = A + B ⊙ tint / 255 (A = untinted part, B = texture of the tinted quads). The
+ * table stores A, B and the tint type (grass, foliage, water); the snapshot provides the biome
+ * tint at the block position. Constant tints (birch, spruce, redstone) are baked into A.
  */
 public final class BlockMaterialTable {
     public static final int TINT_NONE = 0, TINT_GRASS = 1, TINT_FOLIAGE = 2, TINT_WATER = 3;
     private static final int G = GsrLayout.FACE_GROUPS;
     private final byte[] kind;
-    private final int[] albedo;   // [id * G + groupe] : A, 0xAARRGGBB
-    private final int[] tinted;   // [id * G + groupe] : B, 0xRRGGBB
+    private final int[] albedo;   // [id * G + group]: A, 0xAARRGGBB
+    private final int[] tinted;   // [id * G + group]: B, 0xRRGGBB
     private final byte[] tintType;
     private final byte[] emission;
     private final boolean[] unshaded;
@@ -64,11 +64,11 @@ public final class BlockMaterialTable {
 
     public int kind(int rawId) { return kind[rawId]; }
     public int tintType(int rawId) { return tintType[rawId]; }
-    /** Modèle sans ombrage par face (tous ses quads ont « shade » à false, comme les plantes en croix). */
+    /** Model without per-face shading (all its quads have "shade" set to false, like cross plants). */
     public boolean unshaded(int rawId) { return unshaded[rawId]; }
-    /** Albédo avec la teinte par défaut (plaine). */
+    /** Albedo with the default tint (plains). */
     public int albedo(int rawId, int faceGroup) { return albedo(rawId, faceGroup, DEFAULT_TINTS[tintType[rawId]]); }
-    /** Albédo pour une teinte de biome 0xRRGGBB (ignorée si le bloc n'est pas teinté). */
+    /** Albedo for a 0xRRGGBB biome tint (ignored if the block is not tinted). */
     public int albedo(int rawId, int faceGroup, int tint) {
         int i = rawId * G + faceGroup, a = albedo[i];
         if (tintType[rawId] == TINT_NONE) return a;
@@ -80,7 +80,7 @@ public final class BlockMaterialTable {
     }
     public int emission(int rawId) { return emission[rawId]; }
 
-    /** Teintes par défaut par type (index = TINT_*), celles de la plaine. */
+    /** Default tints per type (index = TINT_*), those of the plains. */
     private static final int[] DEFAULT_TINTS = new int[4];
     static final int WATER_DEFAULT = 0x3F76E4;
 
@@ -109,7 +109,7 @@ public final class BlockMaterialTable {
             if (s.isAir()) {
                 k = GsrLayout.KIND_AIR;
             } else if (!f.isEmpty() && f.isIn(FluidTags.WATER) && !s.isOpaqueFullCube(EmptyBlockView.INSTANCE, BlockPos.ORIGIN)) {
-                // Eau (et blocs immergés) : couleur entièrement donnée par la teinte du biome.
+                // Water (and submerged blocks): color entirely given by the biome tint.
                 k = GsrLayout.KIND_TRANSLUCENT; rgb = 0; a = 150;
                 type[0] = TINT_WATER;
                 faces = new int[2 * G];
@@ -120,19 +120,19 @@ public final class BlockMaterialTable {
                 if (s.isOpaqueFullCube(EmptyBlockView.INSTANCE, BlockPos.ORIGIN) || s.isIn(BlockTags.LEAVES)) {
                     k = GsrLayout.KIND_OPAQUE;
                 } else if (s.isFullCube(EmptyBlockView.INSTANCE, BlockPos.ORIGIN)) {
-                    k = GsrLayout.KIND_TRANSLUCENT; a = 90;           // verre, glace, slime...
+                    k = GsrLayout.KIND_TRANSLUCENT; a = 90;           // glass, ice, slime...
                 } else if (solidEnough(s)) {
-                    k = GsrLayout.KIND_OPAQUE;                         // dalles, escaliers
+                    k = GsrLayout.KIND_OPAQUE;                         // slabs, stairs
                 } else if (vegetationLike(s)) {
-                    // Herbes, fleurs, fougères, canne à sucre : voile translucide de l'opacité de leurs
-                    // textures. En air, le repli GSR montrait le côté en terre du bloc derrière une touffe
-                    // de rive que le SSR ratait (reflet marron, plante absente du reflet).
+                    // Grasses, flowers, ferns, sugar cane: translucent veil with the opacity of their
+                    // textures. As air, the GSR fallback showed the dirt side of the block behind a tuft
+                    // of shore vegetation that the SSR missed (brown reflection, plant missing from the reflection).
                     float cov = modelCoverage(s, models, sprites, rnd);
                     k = cov > 0f ? GsrLayout.KIND_TRANSLUCENT : GsrLayout.KIND_AIR;
                     a = Math.max(40, Math.min(200, Math.round(cov * 255f)));
                     t.unshaded[id] = noShade(s, models, rnd);
                 } else {
-                    k = GsrLayout.KIND_AIR;                            // torches, rails, nénuphars
+                    k = GsrLayout.KIND_AIR;                            // torches, rails, lily pads
                 }
                 if (k != GsrLayout.KIND_AIR) {
                     faces = modelFaceColors(s, models, tints, sprites, rnd, type);
@@ -148,12 +148,12 @@ public final class BlockMaterialTable {
             }
             t.emission[id] = (byte) Math.min(15, s.getLuminance());
         }
-        dev.gsr.GsrClient.LOG.info("GSR : table des matériaux, {} états dont {} colorés depuis les textures, {} teintés par le biome ({} textures lues) en {} ms",
+        dev.gsr.GsrClient.LOG.info("GSR: material table, {} states of which {} colored from textures, {} tinted by biome ({} textures read) in {} ms",
                 Block.STATE_IDS.size(), fromModels, tintedStates, sprites.loaded(), (System.nanoTime() - t0) / 1_000_000);
         return t;
     }
 
-    /** Type de teinte d'une couleur de quad renvoyée sans monde : la valeur par défaut identifie le biome-dépendant. */
+    /** Tint type of a quad color returned without a world: the default value identifies the biome-dependent one. */
     private static int classifyTint(int tint) {
         int c = tint & 0xFFFFFF;
         if (c == DEFAULT_TINTS[TINT_GRASS]) return TINT_GRASS;
@@ -162,11 +162,11 @@ public final class BlockMaterialTable {
     }
 
     /**
-     * Couleur moyenne visible de chaque groupe de faces (côtés, dessus, dessous) sous forme affine :
-     * [0, G) = A (0xRRGGBB, partie non teintée), [G, 2G) = B (texture des quads teintés par le biome),
-     * ou null si le modèle n'a aucun quad exploitable. Les quads d'une face se superposent dans l'ordre
-     * de dessin : une surcouche partielle (herbe sur le côté d'un bloc d'herbe) se mélange selon sa
-     * couverture. {@code typeOut[0]} reçoit le type de teinte du bloc.
+     * Average visible color of each face group (sides, top, bottom) in affine form:
+     * [0, G) = A (0xRRGGBB, untinted part), [G, 2G) = B (texture of the biome-tinted quads),
+     * or null if the model has no usable quad. The quads of a face are overlaid in drawing
+     * order: a partial overlay (grass on the side of a grass block) blends according to its
+     * coverage. {@code typeOut[0]} receives the block's tint type.
      */
     private static int[] modelFaceColors(BlockState s, BlockRenderManager models, BlockColors tints, SpriteAverages sprites, Random rnd, int[] typeOut) {
         BakedModel model;
@@ -178,7 +178,7 @@ public final class BlockMaterialTable {
         } catch (Throwable e) {
             return null;
         }
-        float[][] dir = new float[6][];   // ordre Direction.values() : DOWN, UP, NORTH, SOUTH, WEST, EAST
+        float[][] dir = new float[6][];   // Direction.values() order: DOWN, UP, NORTH, SOUTH, WEST, EAST
         for (Direction d : Direction.values()) {
             List<BakedQuad> quads = new ArrayList<>();
             try {
@@ -191,20 +191,20 @@ public final class BlockMaterialTable {
             float[] c = new float[6];   // A rgb, B rgb
             boolean any = false;
             for (BakedQuad q : quads) {
-                float[] avg = sprites.average(q.getSprite());   // r, g, b (0..255), couverture 0..1
+                float[] avg = sprites.average(q.getSprite());   // r, g, b (0..255), coverage 0..1
                 if (avg == null || avg[3] <= 0f) continue;
                 float[] qc = {avg[0], avg[1], avg[2], 0, 0, 0};
                 if (q.hasColor()) {
                     int tint = tint(tints, s, q.getColorIndex());
                     int type = tint == -1 ? TINT_NONE : classifyTint(tint);
                     if (type != TINT_NONE && (typeOut[0] == TINT_NONE || typeOut[0] == type)) {
-                        typeOut[0] = type;   // dépend du biome : part B
+                        typeOut[0] = type;   // biome-dependent: B part
                         qc = new float[]{0, 0, 0, avg[0], avg[1], avg[2]};
-                    } else if (tint != -1) {   // teinte constante : figée dans A
+                    } else if (tint != -1) {   // constant tint: baked into A
                         qc[0] *= ((tint >> 16) & 0xFF) / 255f; qc[1] *= ((tint >> 8) & 0xFF) / 255f; qc[2] *= (tint & 0xFF) / 255f;
                     }
                 }
-                float w = any ? avg[3] : 1f;   // le premier quad pose la base, les suivants se superposent
+                float w = any ? avg[3] : 1f;   // the first quad lays the base, the following ones are overlaid
                 for (int i = 0; i < 6; i++) c[i] += (qc[i] - c[i]) * w;
                 any = true;
             }
@@ -237,7 +237,7 @@ public final class BlockMaterialTable {
 
     private static int tint(BlockColors tints, BlockState s, int index) {
         try {
-            return tints.getColor(s, null, null, index);   // sans monde : teinte par défaut (plaine)
+            return tints.getColor(s, null, null, index);   // without a world: default tint (plains)
         } catch (Throwable e) {
             return -1;
         }
@@ -248,7 +248,7 @@ public final class BlockMaterialTable {
         return (r << 16) | (g << 8) | b;
     }
 
-    /** Moyenne des pixels non transparents de la première image de chaque texture, en cache. */
+    /** Average of the non-transparent pixels of the first image of each texture, cached. */
     private static final class SpriteAverages {
         private final ResourceManager resources;
         private final Map<Identifier, float[]> cache = new HashMap<>();
@@ -267,7 +267,7 @@ public final class BlockMaterialTable {
             if (res.isEmpty()) return null;
             try (InputStream in = res.get().getInputStream();
                  NativeImage img = NativeImage.read(NativeImage.Format.RGBA, in)) {
-                // Texture animée : bande verticale d'images, on ne lit que la première (w x h).
+                // Animated texture: vertical strip of images, only the first one (w x h) is read.
                 int fw = Math.min(w, img.getWidth()), fh = Math.min(h, img.getHeight());
                 double r = 0, g = 0, b = 0;
                 int n = 0;
@@ -295,7 +295,7 @@ public final class BlockMaterialTable {
         }
     }
 
-    /** Sans collision mais assez grand pour compter dans un reflet : contour d'au moins ½ bloc de haut et 6/16 de large (fleurs oui, torches non). */
+    /** No collision but large enough to count in a reflection: outline at least 1/2 block tall and 6/16 wide (flowers yes, torches no). */
     private static boolean vegetationLike(BlockState s) {
         try {
             VoxelShape shape = s.getOutlineShape(EmptyBlockView.INSTANCE, BlockPos.ORIGIN);
@@ -308,8 +308,8 @@ public final class BlockMaterialTable {
     }
 
     /**
-     * Opacité vue de côté d'une plante en croix : deux plans de couverture c chacun, un rayon en traverse
-     * en moyenne un seul par face de voxel franchie (le splat d'entrée et celui de sortie) → c.
+     * Side-on opacity of a cross plant: two planes of coverage c each, a ray crosses on
+     * average only one per voxel face crossed (the entry splat and the exit splat) → c.
      */
     private static float modelCoverage(BlockState s, BlockRenderManager models, SpriteAverages sprites, Random rnd) {
         try {
@@ -332,7 +332,7 @@ public final class BlockMaterialTable {
         }
     }
 
-    /** Vrai si tous les quads du modèle sont dessinés sans ombrage par face (vanilla : « shade »: false). */
+    /** True if all quads of the model are drawn without per-face shading (vanilla: "shade": false). */
     private static boolean noShade(BlockState s, BlockRenderManager models, Random rnd) {
         try {
             BakedModel model = models.getModel(s);

@@ -4,23 +4,23 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 /**
- * Miroir CPU ligne à ligne de gsrTrace() (gsr_common.glsl), opérant sur les mêmes octets que le GPU.
- * Sert de test de référence (format, adressage toroïdal, maths des gaussiennes) et de commande de
- * debug "/gsr probe". Ne pas optimiser : la valeur est dans la fidélité au shader.
+ * Line-by-line CPU mirror of gsrTrace() (gsr_common.glsl), operating on the same bytes as the GPU.
+ * Serves as the reference test (format, toroidal addressing, Gaussian math) and as the
+ * "/gsr probe" debug command. Do not optimize: its value lies in fidelity to the shader.
  */
 public final class CpuReferenceTracer implements GpuSink {
     /** = GSR_ALPHA_GAIN */
     public static final float ALPHA_GAIN = 1.6f;
-    /** = GSR_EDGE_SOFT : découpe des surfels au carré de leur face, fondu sur cette fraction de voxel. */
+    /** = GSR_EDGE_SOFT: surfels are cut to the square of their face, faded over this fraction of a voxel. */
     public static final float EDGE_SOFT = 0.15f;
     /** = smoothstep GLSL. */
     static float smoothstep(float e0, float e1, float x) {
         float t = Math.max(0f, Math.min(1f, (x - e0) / (e1 - e0)));
         return t * t * (3f - 2f * t);
     }
-    /** = GSR_TUFT_BLADES, GSR_TUFT_GAIN : brins des plantes en croix (bit 30). */
+    /** = GSR_TUFT_BLADES, GSR_TUFT_GAIN: blades of cross plants (bit 30). */
     public static final float TUFT_BLADES = 4f, TUFT_GAIN = 1.7f;
-    /** = gsrHash (uint GLSL = int Java, multiplications modulo 2^32). */
+    /** = gsrHash (GLSL uint = Java int, multiplications modulo 2^32). */
     static int hash(int h) { h ^= h >>> 16; h *= 0x7feb352d; h ^= h >>> 15; h *= 0x846ca68b; h ^= h >>> 16; return h; }
     /** = gsrTuft. */
     static float tuft(float qx, float qy, float qz, float[] n, float px, float py, float pz, float vs) {
@@ -37,7 +37,7 @@ public final class CpuReferenceTracer implements GpuSink {
     private final ByteBuffer splats;
     public GsrFrameData frame = new GsrFrameData();
     public int[][] windowMin = new int[GsrLayout.MAX_LEVELS][3];
-    /** = frame.iparams.y bit 0 : parcours cellule par cellule (comportement d'avant le masque de briques). */
+    /** = frame.iparams.y bit 0: cell-by-cell traversal (behavior from before the brick mask). */
     boolean ignoreBrickMask;
 
     public CpuReferenceTracer(GsrConfig cfg) {
@@ -49,7 +49,7 @@ public final class CpuReferenceTracer implements GpuSink {
         splats = ByteBuffer.allocate(slots * cfg.maxSplatsPerPage * GsrLayout.SPLAT_BYTES).order(ByteOrder.LITTLE_ENDIAN);
     }
 
-    // ---------------------------------------------------------------- GpuSink (même layout que le GPU)
+    // ---------------------------------------------------------------- GpuSink (same layout as the GPU)
     @Override public void upload(int slot, PageData p) {
         System.arraycopy(p.cells(), 0, cells, slot * GsrLayout.CELLS_PER_PAGE, GsrLayout.CELLS_PER_PAGE);
         int base = slot * cfg.maxSplatsPerPage * GsrLayout.SPLAT_BYTES;
@@ -63,7 +63,7 @@ public final class CpuReferenceTracer implements GpuSink {
         meta[slot * 8 + 4] = 0; meta[slot * 8 + 5] = 0;
     }
 
-    /** Splats du slot selon la méta « GPU », −1 si le slot est invalide (tests). */
+    /** Splats of the slot according to the "GPU" meta, -1 if the slot is invalid (tests). */
     int metaSplats(int slot) {
         return meta[slot * 8] == GsrLayout.INVALID_PAGE_COORD ? -1 : meta[slot * 8 + 3];
     }
@@ -72,7 +72,7 @@ public final class CpuReferenceTracer implements GpuSink {
         for (int L = 0; L < cfg.levels; L++) windowMin[L] = clip.windowMin(L).clone();
     }
 
-    // ---------------------------------------------------------------- miroir GLSL
+    // ---------------------------------------------------------------- GLSL mirror
     public static final class Hit { public float r, g, b, transmittance = 1f, hitDist; public int level = -1, steps; }
 
     private float relX(int b) { return (float) (b - frame.camBx) - frame.camFx; }
@@ -127,8 +127,8 @@ public final class CpuReferenceTracer implements GpuSink {
             float tfy = Math.max((bminY - oy) * iy, (bminY + size - oy) * iy);
             float tfz = Math.max((bminZ - oz) * iz, (bminZ + size - oz) * iz);
             float tExit = Math.min(Math.min(tfx, tfy), tfz);
-            // Un saut à vide ne franchit pas la distance où l'empreinte du cône dépasse 2^L : au-delà, le
-            // niveau L+1 doit être consulté, et il peut avoir du contenu dans la zone sautée.
+            // An empty skip does not cross the distance where the cone footprint exceeds 2^L: beyond that,
+            // level L+1 must be consulted, and it may have content in the skipped zone.
             if (!occupied && coneTan > 0f) tExit = Math.min(tExit, Math.max((vs - coneBase) / coneTan, t));
 
             if (occupied) {
@@ -167,7 +167,7 @@ public final class CpuReferenceTracer implements GpuSink {
                         float alpha = Math.min(opacity * Math.min(1f, ALPHA_GAIN * (float) Math.exp(-0.5f * Math.max(m2, 0f))), 0.99f) * edge;
                         if (alpha < 1f / 255f) continue;
                         sumA += alpha; keep *= 1f - alpha; sumT += alpha * ts;
-                        // radiance simplifiée : albédo linéaire (l'éclairage est testé séparément)
+                        // simplified radiance: linear albedo (lighting is tested separately)
                         sr += alpha * (float) Math.pow(((rgba >> 16) & 0xFF) / 255f, 2.2);
                         sg += alpha * (float) Math.pow(((rgba >> 8) & 0xFF) / 255f, 2.2);
                         sb += alpha * (float) Math.pow((rgba & 0xFF) / 255f, 2.2);

@@ -41,8 +41,8 @@ import java.util.Collection;
 import java.util.List;
 
 /**
- * Point d'entrée Fabric : câble les événements du monde vers le GaussianChunkManager et les
- * événements de rendu vers le GsrRenderer. Tout s'exécute sur le thread client (tick + rendu).
+ * Fabric entry point: wires world events to the GaussianChunkManager and
+ * render events to the GsrRenderer. Everything runs on the client thread (tick + rendering).
  */
 public final class GsrClient implements ClientModInitializer {
     public static final Logger LOG = LoggerFactory.getLogger("gsr");
@@ -73,7 +73,7 @@ public final class GsrClient implements ClientModInitializer {
         WorldRenderEvents.START.register(ctx -> {
             if (manager != null && RENDERER.available()) RENDERER.beginFrame(ctx, manager, CONFIG);
         });
-        // Avant la couche translucide (vérifié dans WorldRenderer#render 1.21.1 : le rendu debug la précède).
+        // Before the translucent layer (checked in WorldRenderer#render 1.21.1: debug rendering precedes it).
         WorldRenderEvents.BEFORE_DEBUG_RENDER.register(ctx -> {
             if (standaloneActive()) RENDERER.captureOpaqueDepth(ctx, CONFIG);
         });
@@ -89,29 +89,29 @@ public final class GsrClient implements ClientModInitializer {
                             for (String line : statsLines()) c.getSource().sendFeedback(Text.literal(line));
                             return 1;
                         }))
-                        // /gsr reload : relit config/gsr.json (champs structurels : au redémarrage)
+                        // /gsr reload : re-reads config/gsr.json (structural fields: on restart)
                         .then(ClientCommandManager.literal("reload").executes(c -> {
                             boolean restart = CONFIG.copyRuntimeFrom(GsrConfigFile.load(CONFIG_FILE));
-                            c.getSource().sendFeedback(Text.literal("GSR : configuration rechargée"
-                                    + (restart ? " (niveaux, pages, splats/page, liaisons ou threads : appliqués au prochain démarrage)" : "")));
+                            c.getSource().sendFeedback(Text.literal("GSR: configuration reloaded"
+                                    + (restart ? " (levels, pages, splats/page, bindings or threads: applied at next startup)" : "")));
                             return 1;
                         }))
-                        // /gsr scale 1|2 : résolution des passes reflet + temporel (mesures avant/après)
+                        // /gsr scale 1|2 : resolution of the reflection + temporal passes (before/after measurements)
                         .then(ClientCommandManager.literal("scale")
                                 .then(ClientCommandManager.argument("factor", IntegerArgumentType.integer(1, 2)).executes(c -> {
                                     CONFIG.standaloneResolutionScale = IntegerArgumentType.getInteger(c, "factor");
-                                    c.getSource().sendFeedback(Text.literal("GSR : reflet en 1/" + CONFIG.standaloneResolutionScale + " de résolution"));
+                                    c.getSource().sendFeedback(Text.literal("GSR: reflection at 1/" + CONFIG.standaloneResolutionScale + " resolution"));
                                     return 1;
                                 })))
-                        // /gsr debug normal|ssr|gsr|raw|hit|refl : isole la source du reflet ; raw = GSR sans Fresnel, hit = T / distance / niveau en r / g / b, refl = reflet hybride sans Fresnel
+                        // /gsr debug normal|ssr|gsr|raw|hit|refl : isolates the reflection source; raw = GSR without Fresnel, hit = T / distance / level in r / g / b, refl = hybrid reflection without Fresnel
                         .then(ClientCommandManager.literal("debug")
                                 .then(debugView("normal", 0)).then(debugView("ssr", 1)).then(debugView("gsr", 2))
                                 .then(debugView("raw", 3)).then(debugView("hit", 4)).then(debugView("refl", 5)))
-                        // /gsr bricks on|off : masque de briques (mesure avant/après au même endroit)
+                        // /gsr bricks on|off : brick mask (before/after measurement at the same spot)
                         .then(ClientCommandManager.literal("bricks")
                                 .then(brickToggle("on", true)).then(brickToggle("off", false)))));
 
-        // Après les modèles : BlockMaterialTable lit les quads cuits et l'atlas.
+        // After the models: BlockMaterialTable reads the baked quads and the atlas.
         ResourceManagerHelper.get(ResourceType.CLIENT_RESOURCES).registerReloadListener(new SimpleSynchronousResourceReloadListener() {
             @Override public Identifier getFabricId() { return Identifier.of("gsr", "materials"); }
             @Override public Collection<Identifier> getFabricDependencies() { return List.of(ResourceReloadListenerKeys.MODELS); }
@@ -119,25 +119,25 @@ public final class GsrClient implements ClientModInitializer {
         });
 
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(() -> ensureWorld(null)));
-        LOG.info("GSR (Gaussian Space Reflections) initialisé");
+        LOG.info("GSR (Gaussian Space Reflections) initialized");
     }
 
     /**
-     * Développement : -Dgsr.autoshot=<préfixe> prend, 15 s après l'entrée dans le monde, une capture par
-     * vue de debug (normal, ssr, gsr, raw, hit) dans run/screenshots/<préfixe>_<vue>.png, sans intervention.
-     * Le joueur réapparaît où il s'est déconnecté : on retrouve la vue d'une session précédente.
+     * Development: -Dgsr.autoshot=<prefix> takes, 15 s after entering the world, one screenshot per
+     * debug view (normal, ssr, gsr, raw, hit) in run/screenshots/<prefix>_<view>.png, with no intervention.
+     * The player respawns where they disconnected: the view from a previous session can be found again.
      */
     private static final String AUTOSHOT = System.getProperty("gsr.autoshot");
     private static final String[] AUTOSHOT_VIEWS = {"normal", "ssr", "gsr", "raw", "hit"};
     /**
-     * Rafales de scintillement, après les vues : par configuration, FLICKER_FRAMES captures à un tick
-     * d'intervalle, caméra immobile. « off » (mod coupé) mesure l'animation propre de l'eau vanilla.
-     * Comparer avec : java tools/FlickerDiff.java run/screenshots/<préfixe>_flicker_<config>_*.png
+     * Flicker bursts, after the views: per configuration, FLICKER_FRAMES screenshots one tick
+     * apart, camera still. "off" (mod disabled) measures the vanilla water animation on its own.
+     * Compare with: java tools/FlickerDiff.java run/screenshots/<prefix>_flicker_<config>_*.png
      */
     private static final String[] FLICKER_CONFIGS = System.getProperty("gsr.autoshotBursts", "off,default,nobricks,scale1,gsronly").split(",");
     /**
-     * -Dgsr.autoshotMove="dx,dy,dz,dyaw" : déplacement de la caméra par tick pendant les rafales (blocs,
-     * degrés), pour observer le reflet en mouvement. Les rafales passent alors à 24 captures.
+     * -Dgsr.autoshotMove="dx,dy,dz,dyaw" : camera movement per tick during the bursts (blocks,
+     * degrees), to observe the reflection in motion. Bursts then go up to 24 screenshots.
      */
     private static final float[] AUTOSHOT_MOVE = parseMove(System.getProperty("gsr.autoshotMove"));
     private static final int FLICKER_FRAMES = AUTOSHOT_MOVE != null ? 24 : 8;
@@ -152,42 +152,42 @@ public final class GsrClient implements ClientModInitializer {
     private static int autoShotTicks;
 
     /**
-     * -Dgsr.autoshotCmds="locate biome minecraft:swamp;time set noon" : commandes envoyées 5 s après
-     * l'entrée dans le monde (téléportation, heure, météo), avant les captures. Le résultat apparaît
-     * dans le log ([CHAT]). Ce qui suit un « | » est envoyé 13 s avant la première capture (ex. gsr stats : le chat a disparu). « f3t » recharge les ressources.
+     * -Dgsr.autoshotCmds="locate biome minecraft:swamp;time set noon" : commands sent 5 s after
+     * entering the world (teleport, time, weather), before the screenshots. The result appears
+     * in the log ([CHAT]). Whatever follows a "|" is sent 13 s before the first screenshot (e.g. gsr stats: the chat has faded). "f3t" reloads the resources.
      */
     private static final String AUTOSHOT_CMDS = System.getProperty("gsr.autoshotCmds");
 
     private static void autoShot(MinecraftClient client) {
         if (client.world == null || client.player == null) return;
-        client.options.pauseOnLostFocus = false;   // fenêtre en arrière-plan : pas de menu pause (non sauvegardé)
-        if (client.mouse.isCursorLocked()) client.mouse.unlockCursor();   // la souris de l'utilisateur ne tourne plus la caméra
+        client.options.pauseOnLostFocus = false;   // background window: no pause menu (not saved)
+        if (client.mouse.isCursorLocked()) client.mouse.unlockCursor();   // the user's mouse no longer turns the camera
         if (AUTOSHOT_CMDS != null && (autoShotTicks == 100 || autoShotTicks == 640)) {
             String[] parts = AUTOSHOT_CMDS.split("\\|", 2);
             String part = autoShotTicks == 100 ? parts[0] : parts.length > 1 ? parts[1] : "";
             for (String cmd : part.split(";")) {
-                if (cmd.strip().equals("f3t")) client.reloadResources();   // équivalent de F3+T
+                if (cmd.strip().equals("f3t")) client.reloadResources();   // equivalent of F3+T
                 else if (!cmd.isBlank()) client.player.networkHandler.sendChatCommand(cmd.strip());
             }
         }
-        // Vue i à 300 + 60·i ticks ; entre deux, 60 ticks pour que l'historique temporel se stabilise.
-        int t = ++autoShotTicks - (AUTOSHOT_CMDS != null ? 900 : 300);   // téléportation : laisser générer
-        // Caméra figée dès 0,5 s après les commandes tardives (téléportation) : la souris ou le clavier de
-        // l'utilisateur, fenêtre au premier plan, la faisaient dériver entre deux exécutions à comparer.
+        // View i at 300 + 60*i ticks; in between, 60 ticks so the temporal history settles.
+        int t = ++autoShotTicks - (AUTOSHOT_CMDS != null ? 900 : 300);   // teleport: let it generate
+        // Camera frozen from 0.5 s after the late commands (teleport): the user's mouse or keyboard,
+        // with the window in the foreground, made it drift between two runs to be compared.
         if (t >= -250 && t < 60 * AUTOSHOT_VIEWS.length) freezeCamera(client, 0);
         if (t < 0) return;
-        if (client.currentScreen != null) client.setScreen(null);   // chat ou menu ouvert : masquerait l'eau
+        if (client.currentScreen != null) client.setScreen(null);   // chat or menu open: would hide the water
         if (t < 60 * AUTOSHOT_VIEWS.length) {
             if (t % 60 != 0) return;
             int i = t / 60;
             saveShot(client, AUTOSHOT + "_" + AUTOSHOT_VIEWS[i]);
-            if (i == 0) LOG.info("GSR autoshot : caméra tp @s {} {} {} {} {}", client.player.getX(), client.player.getY(), client.player.getZ(), client.player.getYaw(), client.player.getPitch());
-            if (i == 0) for (String line : statsLines()) LOG.info("GSR autoshot stats : {}", line);
-            CONFIG.debugView = (i + 1) % AUTOSHOT_VIEWS.length;   // vue suivante ; normal après la dernière
+            if (i == 0) LOG.info("GSR autoshot: camera tp @s {} {} {} {} {}", client.player.getX(), client.player.getY(), client.player.getZ(), client.player.getYaw(), client.player.getPitch());
+            if (i == 0) for (String line : statsLines()) LOG.info("GSR autoshot stats: {}", line);
+            CONFIG.debugView = (i + 1) % AUTOSHOT_VIEWS.length;   // next view; normal after the last one
             return;
         }
         if (AUTOSHOT_VIDEO != null) { videoTick(client); return; }
-        // Rafales : 60 ticks de stabilisation par configuration, puis une capture par tick.
+        // Bursts: 60 stabilization ticks per configuration, then one screenshot per tick.
         t -= 60 * AUTOSHOT_VIEWS.length;
         int c = t / (60 + FLICKER_FRAMES), k = t % (60 + FLICKER_FRAMES) - 60;
         if (c >= FLICKER_CONFIGS.length) {
@@ -202,10 +202,10 @@ public final class GsrClient implements ClientModInitializer {
     }
 
     /**
-     * -Dgsr.autoshotVideo="frames,dyaw" : à la place des rafales par tick, une « vidéo » par configuration :
-     * la caméra tourne de dyaw degrés à CHAQUE FRAME, capturée juste après le rendu du monde (sans main ni
-     * HUD). Pas angulaire fixe par frame, indépendant de la cadence réelle : reproduit une rotation à la
-     * souris filmée à très haute fréquence. Fichiers <préfixe>_video_<config>_<n>.png.
+     * -Dgsr.autoshotVideo="frames,dyaw" : instead of per-tick bursts, one "video" per configuration:
+     * the camera turns by dyaw degrees on EACH FRAME, captured right after the world is rendered (no hand or
+     * HUD). Fixed angular step per frame, independent of the real frame rate: reproduces a mouse
+     * rotation filmed at very high frequency. Files <prefix>_video_<config>_<n>.png.
      */
     private static final float[] AUTOSHOT_VIDEO = parseMove(System.getProperty("gsr.autoshotVideo"));
     private static int videoConfig, videoWait, videoLeft, videoIndex;
@@ -213,7 +213,7 @@ public final class GsrClient implements ClientModInitializer {
     private static String videoName;
 
     private static void videoTick(MinecraftClient client) {
-        if (videoLeft > 0) return;   // vidéo en cours : pilotée par videoFrame
+        if (videoLeft > 0) return;   // video in progress: driven by videoFrame
         if (videoConfig > FLICKER_CONFIGS.length) return;
         if (videoConfig == FLICKER_CONFIGS.length) {
             applyFlickerConfig("default");
@@ -232,7 +232,7 @@ public final class GsrClient implements ClientModInitializer {
         videoLeft = (int) AUTOSHOT_VIDEO[0];
     }
 
-    /** WorldRenderEvents.END : capture la frame qui vient d'être rendue, puis avance la caméra d'un pas. */
+    /** WorldRenderEvents.END: captures the frame that was just rendered, then advances the camera by one step. */
     private static void videoFrame(MinecraftClient client) {
         if (videoLeft <= 0 || client.player == null) return;
         saveShot(client, videoName + "_" + videoIndex++);
@@ -246,7 +246,7 @@ public final class GsrClient implements ClientModInitializer {
     private static float frozenYaw, frozenPitch;
     private static boolean frozenBob;
 
-    /** Caméra strictement immobile pendant les rafales : un joueur dans l'eau flotte et dérive sinon. */
+    /** Camera strictly still during the bursts: a player in water floats and drifts otherwise. */
     private static void freezeCamera(MinecraftClient client, int step) {
         var p = client.player;
         if (frozenPos == null) {
@@ -258,7 +258,7 @@ public final class GsrClient implements ClientModInitializer {
             p.getAbilities().flying = true;
         }
         float[] m = AUTOSHOT_MOVE != null ? AUTOSHOT_MOVE : new float[4];
-        int s0 = Math.max(step - 1, 0);   // position du tick précédent : interpolation fluide entre ticks
+        int s0 = Math.max(step - 1, 0);   // position of the previous tick: smooth interpolation between ticks
         p.refreshPositionAndAngles(frozenPos.x + m[0] * step, frozenPos.y + m[1] * step, frozenPos.z + m[2] * step,
                 frozenYaw + m[3] * step, frozenPitch);
         p.resetPosition();
@@ -269,7 +269,7 @@ public final class GsrClient implements ClientModInitializer {
     }
 
     private static float baseRoughness = -1f;
-    /** Configuration de rafale : mots-clés combinables par « + » (ex. « refl+scale1 »). */
+    /** Burst configuration: keywords combinable with "+" (e.g. "refl+scale1"). */
     private static void applyFlickerConfig(String name) {
         List<String> w = List.of(name.split("[+]"));
         CONFIG.standaloneEnabled = !w.contains("off");
@@ -282,13 +282,13 @@ public final class GsrClient implements ClientModInitializer {
 
     private static void saveShot(MinecraftClient client, String name) {
         ScreenshotRecorder.saveScreenshot(client.runDirectory, name + ".png",
-                client.getFramebuffer(), msg -> LOG.info("GSR autoshot : {}", msg.getString()));
+                client.getFramebuffer(), msg -> LOG.info("GSR autoshot: {}", msg.getString()));
     }
 
     private static LiteralArgumentBuilder<FabricClientCommandSource> debugView(String name, int mode) {
         return ClientCommandManager.literal(name).executes(c -> {
             CONFIG.debugView = mode;
-            c.getSource().sendFeedback(Text.literal("GSR : vue de debug « " + name + " »"));
+            c.getSource().sendFeedback(Text.literal("GSR: debug view \"" + name + "\""));
             return 1;
         });
     }
@@ -296,23 +296,23 @@ public final class GsrClient implements ClientModInitializer {
     private static LiteralArgumentBuilder<FabricClientCommandSource> brickToggle(String name, boolean on) {
         return ClientCommandManager.literal(name).executes(c -> {
             CONFIG.brickMask = on;
-            c.getSource().sendFeedback(Text.literal("GSR : masque de briques " + (on ? "activé" : "désactivé (cellule par cellule)")));
+            c.getSource().sendFeedback(Text.literal("GSR: brick mask " + (on ? "enabled" : "disabled (cell by cell)")));
             return 1;
         });
     }
 
-    /** Contenu de /gsr stats (thread client). */
+    /** Contents of /gsr stats (client thread). */
     private static List<String> statsLines() {
         List<String> out = new ArrayList<>();
         boolean iris = IrisCompat.isShaderPackInUse();
-        out.add("§6GSR§r — mode " + (iris ? "service (shaderpack Iris)" : CONFIG.standaloneEnabled ? "autonome" : "inactif"));
-        if (manager == null) { out.add("Aucun monde chargé"); return out; }
+        out.add("§6GSR§r — mode " + (iris ? "service (Iris shaderpack)" : CONFIG.standaloneEnabled ? "standalone" : "inactive"));
+        if (manager == null) { out.add("No world loaded"); return out; }
         GaussianChunkManager.Stats s = manager.stats();
         for (int L = 0; L < s.pages().length; L++) {
-            out.add(String.format("L%d (voxel %d) : %d/%d pages, %d non vides, %,d splats",
+            out.add(String.format("L%d (voxel %d): %d/%d pages, %d non-empty, %,d splats",
                     L, 1 << L, s.pages()[L], s.slotsPerLevel(), s.nonEmptyPages()[L], s.splats()[L]));
         }
-        out.add(String.format("Files : captures %d, grossières %d, workers %d, prêtes %d ; résumés %,d ; uploads %,d",
+        out.add(String.format("Queues: captures %d, coarse %d, workers %d, ready %d; summaries %,d; uploads %,d",
                 s.captureQueue(), s.coarsePending(), s.inFlight(), s.readyQueue(), s.summaries(), s.totalUploads()));
         RENDERER.appendStats(out, CONFIG, standaloneActive());
         MinecraftClient mc = MinecraftClient.getInstance();
@@ -322,7 +322,7 @@ public final class GsrClient implements ClientModInitializer {
             int foliage = currentWorld.getColor(pos, BiomeColors.FOLIAGE_COLOR) & 0xFFFFFF;
             int water = currentWorld.getColor(pos, BiomeColors.WATER_COLOR) & 0xFFFFFF;
             int id = Block.getRawIdFromState(Blocks.GRASS_BLOCK.getDefaultState());
-            out.add(String.format("Biome : herbe #%06X, feuillage #%06X, eau #%06X -> dessus d'herbe #%06X (plaine #%06X)",
+            out.add(String.format("Biome: grass #%06X, foliage #%06X, water #%06X -> grass top #%06X (plains #%06X)",
                     grass, foliage, water, materials.albedo(id, GsrLayout.FACE_UP, grass) & 0xFFFFFF,
                     materials.albedo(id, GsrLayout.FACE_UP) & 0xFFFFFF));
         }
@@ -340,7 +340,7 @@ public final class GsrClient implements ClientModInitializer {
         }
     }
 
-    /** Changement de monde / dimension : on repart de zéro (les SSBO sont invalidés par le recentrage). */
+    /** World / dimension change: start from scratch (the SSBOs are invalidated by the recentering). */
     private static void ensureWorld(ClientWorld world) {
         if (world == currentWorld) return;
         if (manager != null) manager.close();
@@ -354,11 +354,11 @@ public final class GsrClient implements ClientModInitializer {
     }
 
     /**
-     * Pack de ressources changé (F3+T, menu) : couleurs des modèles et teintes changent. On reconstruit la
-     * table puis on recapture les sections chargées ; les pages se mettent à jour au fil des captures.
+     * Resource pack changed (F3+T, menu): model colors and tints change. The table is rebuilt
+     * then the loaded sections are recaptured; pages update as the captures come in.
      */
     private static void onResourcesReloaded() {
-        if (materials == null) return; // première construction : paresseuse, à l'entrée dans un monde
+        if (materials == null) return; // first construction: lazy, on entering a world
         materials = BlockMaterialTable.build();
         MinecraftClient client = MinecraftClient.getInstance();
         if (manager == null || client.player == null) return;
@@ -373,10 +373,10 @@ public final class GsrClient implements ClientModInitializer {
                     manager.onChunkLoaded(cx, cz, minSy, maxSy);
                     columns++;
                 }
-        LOG.info("GSR : ressources rechargées, {} colonnes recapturées", columns);
+        LOG.info("GSR: resources reloaded, {} columns recaptured", columns);
     }
 
-    // ---- appelés par ClientWorldMixin (thread client) ----
+    // ---- called by ClientWorldMixin (client thread) ----
     public static void onBlockChanged(int x, int y, int z) {
         if (manager != null) manager.onBlockChanged(x, y, z);
     }

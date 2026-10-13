@@ -3,7 +3,9 @@
   "id": "gsr",
   "version": "${version}",
   "name": "GSR - Gaussian Space Reflections",
-  "description": "Reflets hybrides SSR + champ de Gaussiennes 3D (clipmap en cascade) autour du joueur.",
+  "description": "Hybrid SSR + 3D Gaussian field (cascaded clipmap) reflections around the player.",
+  "authors": ["Claude (Anthropic)", "Rimuru"],
+  "contributors": ["Garloulou (original idea)"],
   "environment": "client",
   "entrypoints": {
     "client": ["dev.gsr.GsrClient"]

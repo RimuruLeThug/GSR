@@ -4,17 +4,17 @@ import java.io.File;
 import java.util.Arrays;
 
 /**
- * Mesure objective du scintillement sur une rafale de captures caméra immobile (GsrClient#autoShot).
- * Usage : java tools/FlickerDiff.java frame_0.png frame_1.png ...
- * Affiche, sur la luminance 0..255 : l'écart moyen entre frames consécutives, la part de pixels dont
- * l'amplitude temporelle (max − min) dépasse 16 et 48, et écrit une carte de chaleur <frame_0>_heat.png
- * (gris = image, rouge = amplitude temporelle).
+ * Objective flicker measurement on a burst of still-camera captures (GsrClient#autoShot).
+ * Usage: java tools/FlickerDiff.java frame_0.png frame_1.png ...
+ * Prints, on luminance 0..255: the mean difference between consecutive frames, the share of pixels whose
+ * temporal amplitude (max − min) exceeds 16 and 48, and writes a heat map <frame_0>_heat.png
+ * (gray = image, red = temporal amplitude).
  */
 public class FlickerDiff {
     public static void main(String[] args) throws Exception {
-        // Les cartes de chaleur des mesures précédentes correspondent au même glob : on les écarte.
+        // Heat maps from previous measurements match the same glob: skip them.
         String[] files = java.util.Arrays.stream(args).filter(a -> !a.endsWith("_heat.png")).toArray(String[]::new);
-        if (files.length < 2) { System.err.println("au moins 2 images"); System.exit(1); }
+        if (files.length < 2) { System.err.println("at least 2 images"); System.exit(1); }
         Arrays.sort(files, (a, b) -> Integer.compare(index(a), index(b)));
         BufferedImage first = ImageIO.read(new File(files[0]));
         int w = first.getWidth(), h = first.getHeight(), n = w * h;
@@ -31,7 +31,7 @@ public class FlickerDiff {
             }
             prev = cur;
         }
-        // Zone « eau » : bas de l'écran, hors main et barre d'inventaire (rangées 45–92 %, colonnes 0–65 %).
+        // "Water" zone: lower screen, excluding hand and hotbar (rows 45–92 %, columns 0–65 %).
         int x1 = (int) (w * 0.65), y0 = (int) (h * 0.45), y1 = (int) (h * 0.92);
         double zoneSum = 0; int zoneN = 0, zone16 = 0;
         int over16 = 0, over48 = 0;
@@ -47,13 +47,13 @@ public class FlickerDiff {
             int red = Math.min(255, g + (int) (r * 4));
             heat.setRGB(i % w, i / w, (red << 16) | (g << 8) | g);
         }
-        System.out.printf("%d images %dx%d : écart moyen %.3f, amplitude >16 : %.2f %%, >48 : %.2f %%%n",
+        System.out.printf("%d images %dx%d: mean difference %.3f, amplitude >16: %.2f %%, >48: %.2f %%%n",
                 files.length, w, h, sumDiff / ((double) n * (files.length - 1)),
                 100.0 * over16 / n, 100.0 * over48 / n);
-        System.out.printf("zone eau : amplitude moyenne %.2f, >16 : %.2f %%%n", zoneSum / zoneN, 100.0 * zone16 / zoneN);
+        System.out.printf("water zone: mean amplitude %.2f, >16: %.2f %%%n", zoneSum / zoneN, 100.0 * zone16 / zoneN);
         File out = new File(files[0].replace(".png", "_heat.png"));
         ImageIO.write(heat, "png", out);
-        System.out.println("carte : " + out);
+        System.out.println("map: " + out);
     }
 
     private static int index(String f) {

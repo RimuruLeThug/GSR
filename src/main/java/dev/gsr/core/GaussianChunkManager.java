@@ -18,24 +18,24 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Gestionnaire des "Gaussian Chunks".
+ * Manager of the "Gaussian Chunks".
  *
- * Pipeline (threads) :
+ * Pipeline (threads):
  * <pre>
- *  [Thread principal]                        [Workers]                         [Thread de rendu]
- *  bloc modifié / chunk chargé
- *    -> file de capture (priorité distance)
+ *  [Main thread]                             [Workers]                         [Render thread]
+ *  block modified / chunk loaded
+ *    -> capture queue (distance priority)
  *  tick(): capture(section) = snapshot ──► SectionSummary.build()
- *                                          + si dans L0 : VoxelGrid → splats ──► file "ready"
- *          résumé changé ◄──────────────── (file "summarized")
- *    -> pages L1..L3 sales (anti-rebond)
- *  tick(): page grossière due ───────────► VoxelGrid.fromSummaries → splats ─► file "ready"
+ *                                          + if in L0: VoxelGrid → splats ──► "ready" queue
+ *          summary changed ◄────────────── ("summarized" queue)
+ *    -> dirty L1..L3 pages (debounce)
+ *  tick(): coarse page due ──────────────► VoxelGrid.fromSummaries → splats ─► "ready" queue
  *                                                                              drainUploads():
- *                                                                              version à jour ? dans
- *                                                                              la fenêtre ? -> GpuSink
+ *                                                                              version up to date? inside
+ *                                                                              the window? -> GpuSink
  * </pre>
- * Sous Minecraft, tick et rendu sont sur le même thread client ; toutes les méthodes publiques
- * sauf le constructeur doivent y être appelées.
+ * Under Minecraft, tick and rendering are on the same client thread; all public methods
+ * except the constructor must be called there.
  */
 public final class GaussianChunkManager implements AutoCloseable {
     private static final int DIST_BUCKETS = 64;
@@ -45,7 +45,7 @@ public final class GaussianChunkManager implements AutoCloseable {
     private final SectionSnapshotSource source;
     private final ExecutorService workers;
 
-    // Partagé avec les workers
+    // Shared with the workers
     private final ConcurrentHashMap<Long, SectionSummary> summaries = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<PageKey, Long> latestVersion = new ConcurrentHashMap<>();
     private final ConcurrentLinkedQueue<PageData> ready = new ConcurrentLinkedQueue<>();
@@ -53,7 +53,7 @@ public final class GaussianChunkManager implements AutoCloseable {
     private final AtomicLong versions = new AtomicLong();
     private final AtomicInteger inFlight = new AtomicInteger();
 
-    // Thread principal uniquement
+    // Main thread only
     @SuppressWarnings("unchecked")
     private final ArrayDeque<Long>[] captureBuckets = new ArrayDeque[DIST_BUCKETS];
     private final Set<Long> captureQueued = new HashSet<>();
@@ -61,7 +61,7 @@ public final class GaussianChunkManager implements AutoCloseable {
     private final List<Integer> pendingInvalidations = new ArrayList<>();
     private int psx, psy, psz;
     private long tickCount;
-    /** Splats par slot GPU tel que téléversé (−1 = slot invalide). Miroir CPU de la méta, pour les stats. */
+    /** Splats per GPU slot as uploaded (-1 = invalid slot). CPU mirror of the meta, for stats. */
     private final int[] slotSplats;
     private long totalUploads;
 
@@ -83,14 +83,14 @@ public final class GaussianChunkManager implements AutoCloseable {
 
     public GaussianClipmap clipmap() { return clipmap; }
     public GsrConfig config() { return cfg; }
-    /** Travail en cours ou en attente (utile pour les tests et le HUD de debug). */
+    /** Work in progress or pending (useful for tests and the debug HUD). */
     public boolean isIdle() {
         return inFlight.get() == 0 && ready.isEmpty() && summarized.isEmpty() && captureQueued.isEmpty() && coarseDue.isEmpty();
     }
 
-    // ------------------------------------------------------------------ Événements du monde
+    // ------------------------------------------------------------------ World events
 
-    /** Un bloc a changé : on reconstruit sa section, et la voisine si le bloc touche une frontière. */
+    /** A block changed: rebuild its section, and the neighboring one if the block touches a boundary. */
     public void onBlockChanged(int bx, int by, int bz) {
         int sx = bx >> 4, sy = by >> 4, sz = bz >> 4;
         enqueueCapture(sx, sy, sz);
@@ -100,10 +100,10 @@ public final class GaussianChunkManager implements AutoCloseable {
         if (lz == 0) enqueueCapture(sx, sy, sz - 1); else if (lz == 15) enqueueCapture(sx, sy, sz + 1);
     }
 
-    /** La lumière d'une section a changé (le résumé ne déclenchera une reconstruction grossière que s'il diffère). */
+    /** The light of a section changed (the summary only triggers a coarse rebuild if it differs). */
     public void onSectionDirty(int sx, int sy, int sz) { enqueueCapture(sx, sy, sz); }
 
-    /** Chunk chargé : ses sections + celles des 4 colonnes voisines (leurs faces de bordure changent). */
+    /** Chunk loaded: its sections + those of the 4 neighboring columns (their border faces change). */
     public void onChunkLoaded(int cx, int cz, int minSy, int maxSy) {
         for (int sy = minSy; sy <= maxSy; sy++) {
             enqueueCapture(cx, sy, cz);
@@ -114,7 +114,7 @@ public final class GaussianChunkManager implements AutoCloseable {
 
     public void onChunkUnloaded(int cx, int cz, int minSy, int maxSy) {
         for (int sy = minSy; sy <= maxSy; sy++) summaries.remove(GsrLayout.sectionKey(cx, sy, cz));
-        // Les pages déjà construites restent valides jusqu'à leur sortie de fenêtre : pas de trou visuel.
+        // Already-built pages stay valid until they leave the window: no visual hole.
     }
 
     private void enqueueCapture(int sx, int sy, int sz) {
@@ -125,22 +125,22 @@ public final class GaussianChunkManager implements AutoCloseable {
         captureBuckets[Math.min(DIST_BUCKETS - 1, d)].add(key);
     }
 
-    // ------------------------------------------------------------------ Tick (thread principal)
+    // ------------------------------------------------------------------ Tick (main thread)
 
     public void tick(int playerBx, int playerBy, int playerBz, long nowMs) {
         tickCount++;
         psx = playerBx >> 4; psy = playerBy >> 4; psz = playerBz >> 4;
 
-        // 1. Recentrage toroïdal : seules les pages entrantes sont à (re)construire.
+        // 1. Toroidal recentering: only the incoming pages need to be (re)built.
         for (PageKey k : clipmap.update(playerBx, playerBy, playerBz)) {
             pendingInvalidations.add(clipmap.slotIndex(k));
             latestVersion.remove(k);
             if (k.level() == 0) {
                 enqueueCapture(k.x(), k.y(), k.z());
             } else {
-                coarseDue.putIfAbsent(k, nowMs); // les résumés existants suffisent souvent
-                // Sections déjà chargées mais jamais résumées (elles étaient hors couverture) :
-                // aucun événement de chargement ne les signalera, on les demande explicitement.
+                coarseDue.putIfAbsent(k, nowMs); // existing summaries are often enough
+                // Sections already loaded but never summarized (they were outside coverage):
+                // no load event will report them, so we request them explicitly.
                 int span = 1 << k.level();
                 for (int dz = 0; dz < span; dz++)
                     for (int dy = 0; dy < span; dy++)
@@ -151,7 +151,7 @@ public final class GaussianChunkManager implements AutoCloseable {
             }
         }
 
-        // 2. Résumés modifiés -> pages grossières sales (avec anti-rebond croissant par niveau).
+        // 2. Modified summaries -> dirty coarse pages (with debounce increasing per level).
         for (Long key; (key = summarized.poll()) != null; ) {
             int sx = GsrLayout.sectionKeyX(key), sy = GsrLayout.sectionKeyY(key), sz = GsrLayout.sectionKeyZ(key);
             for (int L = 1; L < clipmap.levels(); L++) {
@@ -160,10 +160,10 @@ public final class GaussianChunkManager implements AutoCloseable {
             }
         }
 
-        // 3. Captures, de la plus proche à la plus lointaine. Une section non chargée (null) ne coûte
-        //    qu'une recherche de chunk : elle ne consomme pas le budget de copies, sinon la couverture
-        //    L3 (±512 blocs, bien au-delà de la distance de rendu) remplit la file de sections vides qui
-        //    ne se vide jamais (vu en jeu : ~100 000 entrées). Plafond séparé pour borner le tick.
+        // 3. Captures, from nearest to farthest. An unloaded section (null) only costs
+        //    a chunk lookup: it does not consume the copy budget, otherwise L3 coverage
+        //    (+/-512 blocks, well beyond the render distance) fills the queue with empty sections that
+        //    never drains (seen in game: ~100,000 entries). Separate cap to bound the tick.
         int budget = cfg.capturesPerTick;
         int attempts = cfg.capturesPerTick * 64;
         for (int b = 0; b < DIST_BUCKETS && budget > 0 && attempts > 0; b++) {
@@ -175,13 +175,13 @@ public final class GaussianChunkManager implements AutoCloseable {
                 if (!clipmap.sectionInCoverage(sx, sy, sz)) continue;
                 attempts--;
                 VoxelSource src = source.capture(sx, sy, sz);
-                if (src == null) continue; // non chargée : sera re-signalée au chargement du chunk
+                if (src == null) continue; // not loaded: will be signaled again when the chunk loads
                 budget--;
                 submitSectionJob(key, sx, sy, sz, src);
             }
         }
 
-        // 4. Pages grossières dont l'anti-rebond est écoulé.
+        // 4. Coarse pages whose debounce has elapsed.
         int coarseBudget = cfg.coarseJobsPerTick;
         for (Iterator<Map.Entry<PageKey, Long>> it = coarseDue.entrySet().iterator(); it.hasNext() && coarseBudget > 0; ) {
             Map.Entry<PageKey, Long> e = it.next();
@@ -192,7 +192,7 @@ public final class GaussianChunkManager implements AutoCloseable {
             coarseBudget--;
         }
 
-        // 5. Éviction périodique des résumés hors couverture.
+        // 5. Periodic eviction of summaries outside coverage.
         if (tickCount % 200 == 0) {
             summaries.keySet().removeIf(k -> !clipmap.sectionInCoverage(
                     GsrLayout.sectionKeyX(k), GsrLayout.sectionKeyY(k), GsrLayout.sectionKeyZ(k)));
@@ -246,9 +246,9 @@ public final class GaussianChunkManager implements AutoCloseable {
         });
     }
 
-    // ------------------------------------------------------------------ Téléversement (thread de rendu)
+    // ------------------------------------------------------------------ Upload (render thread)
 
-    /** @return nombre de pages envoyées au GPU. */
+    /** @return number of pages sent to the GPU. */
     public int drainUploads(GpuSink sink, int budget) {
         for (int slot : pendingInvalidations) { sink.invalidate(slot); slotSplats[slot] = -1; }
         pendingInvalidations.clear();
@@ -257,7 +257,7 @@ public final class GaussianChunkManager implements AutoCloseable {
             PageData pd = ready.poll();
             if (pd == null) break;
             Long v = latestVersion.get(pd.key());
-            if (v == null || v != pd.version() || !clipmap.contains(pd.key())) continue; // obsolète
+            if (v == null || v != pd.version() || !clipmap.contains(pd.key())) continue; // stale
             int slot = clipmap.slotIndex(pd.key());
             sink.upload(slot, pd);
             slotSplats[slot] = pd.splatCount();
@@ -267,11 +267,11 @@ public final class GaussianChunkManager implements AutoCloseable {
         return n;
     }
 
-    // ------------------------------------------------------------------ Statistiques (thread principal)
+    // ------------------------------------------------------------------ Statistics (main thread)
 
     /**
-     * Instantané pour /gsr stats. Par niveau : pages valides sur le GPU, dont non vides, splats.
-     * Files : captures en attente, pages grossières en anti-rebond, tâches workers, pages prêtes non envoyées.
+     * Snapshot for /gsr stats. Per level: valid pages on the GPU, of which non-empty, splats.
+     * Queues: pending captures, coarse pages in debounce, worker tasks, ready pages not yet sent.
      */
     public record Stats(int slotsPerLevel, int[] pages, int[] nonEmptyPages, long[] splats,
                         int captureQueue, int coarsePending, int inFlight, int readyQueue,

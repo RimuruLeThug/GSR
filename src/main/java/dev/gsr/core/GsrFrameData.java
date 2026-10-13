@@ -3,21 +3,21 @@ package dev.gsr.core;
 import java.nio.ByteBuffer;
 
 /**
- * Données par frame (SSBO binding base+0), std430. Miroir exact de "struct GsrFrame" en GLSL :
+ * Per-frame data (SSBO binding base+0), std430. Exact mirror of "struct GsrFrame" in GLSL:
  * <pre>
- *  ivec4 camBlock;      // xyz = bloc entier de la caméra, w = index de frame
- *  vec4  camFrac;       // xyz = partie fractionnaire,     w = nombre de niveaux
- *  ivec4 pageDims;      // xyz = pages par niveau,         w = slots par niveau
- *  ivec4 windowMin[4];  // coin min de chaque fenêtre (coord. de page)
- *  ivec4 iparams;       // x = maxSplatsPerPage, y bit 0 = ignorer le masque de briques (debug)
- *  vec4  sunDir;        // xyz normalisé,                  w = intensité ciel (jour/nuit)
+ *  ivec4 camBlock;      // xyz = integer camera block, w = frame index
+ *  vec4  camFrac;       // xyz = fractional part,          w = number of levels
+ *  ivec4 pageDims;      // xyz = pages per level,          w = slots per level
+ *  ivec4 windowMin[4];  // min corner of each window (page coords)
+ *  ivec4 iparams;       // x = maxSplatsPerPage, y bit 0 = ignore the brick mask (debug)
+ *  vec4  sunDir;        // xyz normalized,                 w = sky intensity (day/night)
  *  vec4  sunColor;
  *  vec4  skyZenith;
  *  vec4  skyHorizon;
- *  vec4  blockLight;    // rgb torches,                    w = force d'émission
+ *  vec4  blockLight;    // rgb torches,                    w = emission strength
  * </pre>
- * L'espace de travail de tous les shaders est "relatif caméra, non tourné" (comme le rendu vanilla
- * et l'espace "player" d'Iris) : P_monde = camBlock + camFrac + P.
+ * The working space of all shaders is "camera-relative, unrotated" (like vanilla rendering
+ * and Iris's "player" space): P_world = camBlock + camFrac + P.
  */
 public final class GsrFrameData {
     public static final int BYTES = 13 * 16;

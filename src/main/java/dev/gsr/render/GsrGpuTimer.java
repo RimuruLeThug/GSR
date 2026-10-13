@@ -3,10 +3,10 @@ package dev.gsr.render;
 import static org.lwjgl.opengl.GL43C.*;
 
 /**
- * Chronométrage GPU par sections (requêtes GL_TIME_ELAPSED), sans jamais bloquer le CPU : chaque
- * section a un anneau de RING requêtes, et le résultat d'une frame n'est lu que RING−1 frames plus
- * tard, s'il est disponible. Moyenne glissante exponentielle en millisecondes.
- * Les requêtes GL_TIME_ELAPSED ne s'imbriquent pas : les sections doivent être disjointes.
+ * GPU timing per section (GL_TIME_ELAPSED queries), never blocking the CPU: each
+ * section has a ring of RING queries, and the result of a frame is only read RING-1 frames
+ * later, if available. Exponential moving average in milliseconds.
+ * GL_TIME_ELAPSED queries cannot be nested: sections must be disjoint.
  */
 final class GsrGpuTimer {
     private static final int RING = 4;
@@ -29,14 +29,14 @@ final class GsrGpuTimer {
         pending[frame % RING][section] = true;
     }
 
-    /** À appeler une fois par frame : avance l'anneau et récupère les résultats prêts. */
+    /** To be called once per frame: advances the ring and collects the ready results. */
     void endFrame() {
         frame++;
-        int r = frame % RING;   // le plus ancien emplacement, réutilisé à cette frame
+        int r = frame % RING;   // the oldest slot, reused this frame
         for (int s = 0; s < avgMs.length; s++) {
             if (!pending[r][s]) continue;
             pending[r][s] = false;
-            if (glGetQueryObjecti(queries[r][s], GL_QUERY_RESULT_AVAILABLE) == GL_FALSE) continue; // trop tard : on jette
+            if (glGetQueryObjecti(queries[r][s], GL_QUERY_RESULT_AVAILABLE) == GL_FALSE) continue; // too late: discard
             double ms = glGetQueryObjecti64(queries[r][s], GL_QUERY_RESULT) / 1e6;
             avgMs[s] = avgMs[s] == 0 ? ms : avgMs[s] * 0.9 + ms * 0.1;
         }

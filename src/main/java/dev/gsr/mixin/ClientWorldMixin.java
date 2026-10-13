@@ -10,24 +10,24 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Point d'écoute des modifications du monde.
+ * World modification listener.
  *
- * Choix délibéré : on s'accroche à ClientWorld et NON au WorldRenderer / au ChunkBuilder.
- * Sodium remplace entièrement la reconstruction des chunks (et Iris s'appuie sur Sodium) ; ClientWorld,
- * lui, n'est modifié par aucun des deux. GSR reste donc compatible vanilla / Sodium / Iris avec un seul
- * mixin, et sa génération de splats est découplée du maillage.
- * (Noms Yarn 1.21.1.)
+ * Deliberate choice: we hook into ClientWorld and NOT into WorldRenderer / ChunkBuilder.
+ * Sodium entirely replaces chunk rebuilding (and Iris builds on Sodium); ClientWorld,
+ * on the other hand, is modified by neither. GSR therefore stays compatible with vanilla / Sodium / Iris with a single
+ * mixin, and its splat generation is decoupled from meshing.
+ * (Yarn 1.21.1 names.)
  */
 @Mixin(ClientWorld.class)
 public abstract class ClientWorldMixin {
 
-    /** Appelé par setBlockState côté client (paquets de mise à jour de blocs, prédictions). */
+    /** Called by setBlockState on the client side (block update packets, predictions). */
     @Inject(method = "updateListeners", at = @At("TAIL"))
     private void gsr$onBlockUpdate(BlockPos pos, BlockState oldState, BlockState newState, int flags, CallbackInfo ci) {
         if (oldState != newState) GsrClient.onBlockChanged(pos.getX(), pos.getY(), pos.getZ());
     }
 
-    /** Appelé lors des mises à jour de lumière (coordonnées de section). */
+    /** Called on light updates (section coordinates). */
     @Inject(method = "scheduleBlockRenders", at = @At("TAIL"))
     private void gsr$onLightUpdate(int sx, int sy, int sz, CallbackInfo ci) {
         GsrClient.onSectionDirty(sx, sy, sz);

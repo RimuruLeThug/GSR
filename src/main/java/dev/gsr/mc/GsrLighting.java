@@ -5,8 +5,8 @@ import net.minecraft.client.world.ClientWorld;
 import net.minecraft.util.math.Vec3d;
 
 /**
- * Remplit l'éclairage global de la frame. Les splats ne stockent que albédo + niveaux de lumière :
- * le cycle jour/nuit et la météo changent les reflets SANS reconstruire un seul splat.
+ * Fills the frame's global lighting. Splats only store albedo + light levels:
+ * the day/night cycle and the weather change the reflections WITHOUT rebuilding a single splat.
  */
 public final class GsrLighting {
     private GsrLighting() {}
@@ -19,13 +19,13 @@ public final class GsrLighting {
             return;
         }
         float a = world.getSkyAngleRadians(tickDelta);
-        // Rotation vanilla du ciel autour de Z : lever à l'est (+X), zénith à midi.
+        // Vanilla sky rotation around Z: sunrise in the east (+X), zenith at noon.
         float sx = (float) -Math.sin(a), sy = (float) Math.cos(a);
         boolean moon = sy < 0f;
         f.sunDir = moon ? new float[]{-sx, -sy, 0f} : new float[]{sx, sy, 0f};
 
         float rain = world.getRainGradient(tickDelta);
-        float bright = world.getSkyBrightness(tickDelta);          // ~0.2 (nuit) .. 1 (jour)
+        float bright = world.getSkyBrightness(tickDelta);          // ~0.2 (night) .. 1 (day)
         f.skyBrightness = bright;
 
         Vec3d sky = world.getSkyColor(cam, tickDelta);
@@ -34,7 +34,7 @@ public final class GsrLighting {
         f.skyHorizon = new float[]{zr * 0.6f + 0.4f * bright, zg * 0.6f + 0.4f * bright, zb * 0.6f + 0.4f * bright};
 
         float elev = Math.max(0f, f.sunDir[1]);
-        float warm = 1f - (float) Math.pow(elev, 0.35);            // soleil orangé près de l'horizon
+        float warm = 1f - (float) Math.pow(elev, 0.35);            // orange-tinted sun near the horizon
         float sunI = (moon ? 0.08f : 2.2f) * (1f - 0.85f * rain);
         f.sunColor = moon
                 ? new float[]{0.6f * sunI, 0.7f * sunI, 1.0f * sunI}

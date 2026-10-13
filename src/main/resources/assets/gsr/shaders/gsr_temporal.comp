@@ -1,26 +1,26 @@
 // =============================================================================================
-//  GSR — Passe 2 : accumulation temporelle (reprojection + clipping de voisinage)
+//  GSR — Pass 2: temporal accumulation (reprojection + neighborhood clipping)
 //
-//  Deux reprojections, mélangées selon la rugosité :
-//   - surfaces rugueuses : reprojection de la SURFACE (le reflet flou "colle" au sol) ;
-//   - surfaces lisses   : reprojection de l'IMAGE VIRTUELLE (P + V·distance d'impact) : le reflet
-//     d'un miroir se déplace avec la parallaxe de l'objet réfléchi, pas avec le miroir.
-//  Historique long + clipping large sur le rugueux (tue le bruit GGX), court + serré sur le lisse
-//  (pas de traînées) : netteté sur l'eau calme, dispersion naturelle sur les blocs mats.
+//  Two reprojections, blended according to roughness:
+//   - rough surfaces  : reprojection of the SURFACE (the blurry reflection "sticks" to the ground);
+//   - smooth surfaces : reprojection of the VIRTUAL IMAGE (P + V·hit distance): a mirror's
+//     reflection moves with the parallax of the reflected object, not with the mirror.
+//  Long history + wide clipping on rough (kills GGX noise), short + tight on smooth
+//  (no trails): sharpness on calm water, natural dispersion on matte blocks.
 // =============================================================================================
 layout(local_size_x = 8, local_size_y = 8) in;
 
 #include "gsr_screen.glsl"
 
 layout(binding = 0) uniform sampler2D uDepth;
-layout(binding = 1) uniform usampler2D uRepr;     // indice du pixel représentatif (passe reflet)
-layout(binding = 2) uniform sampler2D uCurrent;   // rgb + distance d'impact
-layout(binding = 3) uniform sampler2D uHistory;   // rgb + longueur d'historique
-layout(binding = 4) uniform sampler2D uPrevDist;  // distance caméra de la frame précédente
+layout(binding = 1) uniform usampler2D uRepr;     // index of the representative pixel (reflection pass)
+layout(binding = 2) uniform sampler2D uCurrent;   // rgb + hit distance
+layout(binding = 3) uniform sampler2D uHistory;   // rgb + history length
+layout(binding = 4) uniform sampler2D uPrevDist;  // camera distance of the previous frame
 layout(rgba16f, binding = 0) writeonly uniform image2D uHistoryOut;
 layout(r32f,    binding = 1) writeonly uniform image2D uDistOut;
 
-uniform mat4 uPrevViewProj;   // proj_{n-1} · view_{n-1}, espace relatif à la caméra n-1
+uniform mat4 uPrevViewProj;   // proj_{n-1} · view_{n-1}, camera n-1 relative space
 uniform vec3 uCamDelta;       // camPos_n − camPos_{n-1}
 uniform int  uHistoryValid;
 
@@ -35,29 +35,29 @@ vec3 clipToAABB(vec3 center, vec3 extent, vec3 q) {
 }
 
 void main() {
-    ivec2 lp = ivec2(gl_GlobalInvocationID.xy);   // texel basse résolution
+    ivec2 lp = ivec2(gl_GlobalInvocationID.xy);   // low-resolution texel
     ivec2 lowSize = gsrLowResSize();
     if (any(greaterThanEqual(lp, lowSize))) return;
 
     vec4 cur = texelFetch(uCurrent, lp, 0);
-    if (cur.a < 0.0) {   // la passe reflet n'a trouvé aucun pixel réfléchissant dans ce bloc
+    if (cur.a < 0.0) {   // the reflection pass found no reflecting pixel in this block
         imageStore(uHistoryOut, lp, vec4(0.0));
         imageStore(uDistOut, lp, vec4(1e9));
         return;
     }
-    // Pixel représentatif choisi par la passe reflet (au lieu de refaire la recherche : jusqu'à 4
-    // reconstructions de normale par texel). Mode autonome : rugosité uniforme.
+    // Representative pixel chosen by the reflection pass (instead of redoing the search: up to 4
+    // normal reconstructions per texel). Standalone mode: uniform roughness.
     uint ri = texelFetch(uRepr, lp, 0).r;
     ivec2 px = lp * uResScale + ivec2(int(ri) % uResScale, int(ri) / uResScale);
     vec3 vp = gsrViewPos((vec2(px) + 0.5) / uScreenSize, texelFetch(uDepth, px, 0).r);
     float rough = uRoughness;
     vec3 P = (uInvView * vec4(vp, 1.0)).xyz;
-    // Le reflet vient du pixel représentatif, mais l'historique est stocké au centre du texel :
-    // on lit l'historique décalé d'autant, sinon chaque frame le rééchantillonnerait de ¼ de texel
-    // (flou cumulatif caméra immobile).
+    // The reflection comes from the representative pixel, but the history is stored at the texel center:
+    // we read the history offset by the same amount, otherwise every frame would resample it by ¼ texel
+    // (cumulative blur with a still camera).
     vec2 corr = (vec2(lp * uResScale) + 0.5 * float(uResScale) - (vec2(px) + 0.5)) / uScreenSize;
 
-    // ---- reprojection hybride surface / image virtuelle ----
+    // ---- hybrid surface / virtual-image reprojection ----
     vec3 Pprev = P + uCamDelta;
     vec2 uvSurf = gsrProject(uPrevViewProj, Pprev);
     vec3 Pvirt  = P + normalize(P) * cur.a;
@@ -68,13 +68,13 @@ void main() {
     bool valid = uHistoryValid != 0
               && all(greaterThanEqual(uvPrev, vec2(0.0))) && all(lessThanEqual(uvPrev, vec2(1.0)))
               && all(greaterThanEqual(uvSurf, vec2(0.0))) && all(lessThanEqual(uvSurf, vec2(1.0)));
-    if (valid) {   // désocclusion : la surface était-elle visible au même endroit ?
+    if (valid) {   // disocclusion: was the surface visible at the same place?
         float prevDist = textureLod(uPrevDist, gsrScreenToLowUV(uvSurf + corr), 0.0).r;
         float expected = length(Pprev);
         valid = abs(prevDist - expected) < 0.05 * expected + 0.1;
     }
 
-    // ---- statistiques du voisinage 3x3 (YCoCg) ----
+    // ---- 3x3 neighborhood statistics (YCoCg) ----
     vec3 m1 = vec3(0.0), m2 = vec3(0.0);
     float n = 0.0;
     for (int y = -1; y <= 1; y++)

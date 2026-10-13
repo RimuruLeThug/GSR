@@ -24,29 +24,29 @@ import java.util.Map;
 import static org.lwjgl.opengl.GL43C.*;
 
 /**
- * Orchestration GPU par frame.
+ * Per-frame GPU orchestration.
  *
- *  WorldRenderEvents.START : téléversement des pages prêtes, écriture du SSBO "frame", liaison des 4 SSBO
- *                            (ils restent liés toute la frame -> utilisables par un shaderpack Iris).
- *  WorldRenderEvents.LAST  : (mode autonome, sans shaderpack) 3 dispatchs compute sur le framebuffer
- *                            principal : reflect (SSR->GSR) -> temporal -> composite. La main et le HUD
- *                            sont rendus ensuite par le jeu, donc jamais réfléchis par erreur.
- *  WorldRenderEvents.END   : mémorise les matrices pour la reprojection de la frame suivante.
+ *  WorldRenderEvents.START : upload of ready pages, writing of the "frame" SSBO, binding of the 4 SSBOs
+ *                            (they stay bound for the whole frame -> usable by an Iris shaderpack).
+ *  WorldRenderEvents.LAST  : (standalone mode, no shaderpack) 3 compute dispatches on the main
+ *                            framebuffer: reflect (SSR->GSR) -> temporal -> composite. The hand and HUD
+ *                            are rendered afterwards by the game, so they are never reflected by mistake.
+ *  WorldRenderEvents.END   : stores the matrices for the reprojection of the next frame.
  *
- * Hygiène d'état : Minecraft met en cache son état GL (GlStateManager). On relit et on restaure
- * exactement ce qu'on touche (programme, unité active, textures 0..5) pour que ce cache reste vrai.
+ * State hygiene: Minecraft caches its GL state (GlStateManager). We re-read and restore
+ * exactly what we touch (program, active unit, textures 0..5) so that this cache stays accurate.
  */
 public final class GsrRenderer {
     private boolean initialized, failed;
     private GsrGpuResources gpu;
     private final GsrScreenTargets targets = new GsrScreenTargets();
     private int progDepthCopy, progReflect, progTemporal, progComposite;
-    /** Vrai si la profondeur opaque a été copiée pendant cette frame (sinon le masque serait faux). */
+    /** True if the opaque depth was copied during this frame (otherwise the mask would be wrong). */
     private boolean opaqueDepthCaptured;
 
-    // Chronométrage (/gsr stats) : sections GPU disjointes + temps CPU des téléversements.
+    // Timing (/gsr stats): disjoint GPU sections + CPU time of uploads.
     static final int T_DEPTH = 0, T_REFLECT = 1, T_TEMPORAL = 2, T_COMPOSITE = 3;
-    private static final String[] T_NAMES = {"copie prof.", "reflet", "temporel", "composition"};
+    private static final String[] T_NAMES = {"depth copy", "reflection", "temporal", "composite"};
     private GsrGpuTimer timer;
     private double uploadCpuMs;
     private int lastUploads;
@@ -65,10 +65,10 @@ public final class GsrRenderer {
         String glInfo = glGetString(GL_VERSION) + " / " + glGetString(GL_RENDERER) + " / GLSL " + glGetString(GL_SHADING_LANGUAGE_VERSION);
         if (!supportsGl43Features()) {
             failed = true;
-            GsrClient.LOG.warn("GSR désactivé : compute shaders + SSBO indisponibles ({}). macOS plafonne à 4.1.", glInfo);
+            GsrClient.LOG.warn("GSR disabled: compute shaders + SSBO unavailable ({}). macOS caps at 4.1.", glInfo);
             return false;
         }
-        GsrClient.LOG.info("GSR : contexte {}", glInfo);
+        GsrClient.LOG.info("GSR: context {}", glInfo);
         try {
             gpu = new GsrGpuResources(cfg);
             progDepthCopy = GsrShaderLoader.compileCompute("gsr_depthcopy.comp", cfg.ssboBindingBase);
@@ -79,15 +79,15 @@ public final class GsrRenderer {
             initialized = true;
         } catch (RuntimeException e) {
             failed = true;
-            GsrClient.LOG.error("GSR désactivé : initialisation GPU impossible", e);
+            GsrClient.LOG.error("GSR disabled: GPU initialization failed", e);
         }
         return initialized;
     }
 
     /**
-     * Minecraft demande un contexte 3.2 Core. Certains pilotes (AMD notamment) annoncent alors exactement
-     * "3.2" bien que le matériel gère 4.6 : OpenGL43 est faux, mais les fonctions sont exposées via les
-     * extensions ARB (LWJGL partage les pointeurs core/ARB). On accepte donc l'un ou l'autre.
+     * Minecraft requests a 3.2 Core context. Some drivers (AMD in particular) then report exactly
+     * "3.2" even though the hardware handles 4.6: OpenGL43 is false, but the functions are exposed via the
+     * ARB extensions (LWJGL shares core/ARB pointers). So we accept either one.
      */
     private static boolean supportsGl43Features() {
         GLCapabilities c = GL.getCapabilities();
@@ -95,7 +95,7 @@ public final class GsrRenderer {
         boolean ext = c.GL_ARB_compute_shader && c.GL_ARB_shader_storage_buffer_object
                 && c.GL_ARB_shader_image_load_store && c.GL_ARB_texture_storage;
         if (!ext) return false;
-        // Le source utilise "#version 430 core" : il faut un compilateur GLSL >= 4.30.
+        // The source uses "#version 430 core": a GLSL compiler >= 4.30 is required.
         String glsl = glGetString(GL_SHADING_LANGUAGE_VERSION);
         try {
             String[] v = glsl.trim().split("[ .]");
@@ -106,7 +106,7 @@ public final class GsrRenderer {
         }
     }
 
-    // ------------------------------------------------------------------ début de frame
+    // ------------------------------------------------------------------ start of frame
 
     public void beginFrame(WorldRenderContext ctx, GaussianChunkManager mgr, GsrConfig cfg) {
         if (!ensureInit(cfg)) return;
@@ -125,9 +125,9 @@ public final class GsrRenderer {
         gpu.bindAll();
     }
 
-    // ------------------------------------------------------------------ mode autonome
+    // ------------------------------------------------------------------ standalone mode
 
-    /** Unités de texture touchées par les passes (0..5) : sauvegardées puis restaurées à l'identique. */
+    /** Texture units touched by the passes (0..5): saved then restored identically. */
     private static final int TEX_UNITS = 6;
 
     private static int[] saveGlState() {
@@ -147,15 +147,15 @@ public final class GsrRenderer {
     }
 
     /**
-     * Profondeur de la scène vue par les passes : en mode graphique « Fabuleux », l'eau est rendue dans
-     * un framebuffer translucide séparé, dont la profondeur part d'une copie de l'opaque.
+     * Depth of the scene seen by the passes: in "Fabulous" graphics mode, water is rendered into
+     * a separate translucent framebuffer, whose depth starts from a copy of the opaque one.
      */
     private static int sceneDepthTexture(WorldRenderContext ctx, Framebuffer main) {
         Framebuffer tr = ctx.worldRenderer().getTranslucentFramebuffer();
         return tr != null ? tr.getDepthAttachment() : main.getDepthAttachment();
     }
 
-    /** WorldRenderEvents.BEFORE_DEBUG_RENDER : la couche translucide n'est pas encore dessinée. */
+    /** WorldRenderEvents.BEFORE_DEBUG_RENDER: the translucent layer is not drawn yet. */
     public void captureOpaqueDepth(WorldRenderContext ctx, GsrConfig cfg) {
         if (!initialized) return;
         Framebuffer fb = MinecraftClient.getInstance().getFramebuffer();
@@ -181,7 +181,7 @@ public final class GsrRenderer {
         if (!initialized) return;
         Framebuffer fb = MinecraftClient.getInstance().getFramebuffer();
         int w = fb.textureWidth, h = fb.textureHeight;
-        // Sans profondeur opaque de CETTE frame, le masque eau/translucide serait faux : on saute.
+        // Without this FRAME's opaque depth, the water/translucent mask would be wrong: skip.
         if (!opaqueDepthCaptured || targets.width != w || targets.height != h
                 || targets.scale != cfg.standaloneResolutionScale) return;
         opaqueDepthCaptured = false;
@@ -195,11 +195,11 @@ public final class GsrRenderer {
             Matrix4f invProj = new Matrix4f(proj).invert();
             Matrix4f invView = new Matrix4f(view).invert();
             int gx = (w + 7) / 8, gy = (h + 7) / 8;
-            // Passes reflet + temporel en basse résolution ; la composition reste en pleine résolution.
+            // Reflection + temporal passes at low resolution; compositing stays at full resolution.
             int lgx = (targets.lowWidth + 7) / 8, lgy = (targets.lowHeight + 7) / 8;
             int cur = targets.current, prev = targets.prev();
 
-            // 1) SSR -> GSR -> ciel
+            // 1) SSR -> GSR -> sky
             glUseProgram(progReflect);
             setCommon(progReflect, proj, invProj, view, invView, w, h, cfg);
             set1f(progReflect, "uMaxTrace", cfg.maxTraceDistance);
@@ -213,7 +213,7 @@ public final class GsrRenderer {
             timer.end(T_REFLECT);
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 
-            // 2) accumulation temporelle
+            // 2) temporal accumulation
             glUseProgram(progTemporal);
             setCommon(progTemporal, proj, invProj, view, invView, w, h, cfg);
             setMat(progTemporal, "uPrevViewProj", prevViewProj);
@@ -233,7 +233,7 @@ public final class GsrRenderer {
             timer.end(T_TEMPORAL);
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 
-            // 3) composition dans le framebuffer principal
+            // 3) compositing into the main framebuffer
             glUseProgram(progComposite);
             setCommon(progComposite, proj, invProj, view, invView, w, h, cfg);
             glUniform1i(loc(progComposite, "uDebugView"), cfg.debugView);
@@ -252,7 +252,7 @@ public final class GsrRenderer {
         }
     }
 
-    // ------------------------------------------------------------------ fin de frame
+    // ------------------------------------------------------------------ end of frame
 
     public void endFrame(WorldRenderContext ctx) {
         prevViewProj.set(ctx.projectionMatrix()).mul(ctx.positionMatrix());
@@ -261,11 +261,11 @@ public final class GsrRenderer {
         if (initialized) timer.endFrame();
     }
 
-    /** Lignes « rendu » de /gsr stats (thread client). */
+    /** "Render" lines of /gsr stats (client thread). */
     public void appendStats(java.util.List<String> out, GsrConfig cfg, boolean standalone) {
-        if (failed) { out.add("Rendu : désactivé (voir le log)"); return; }
-        if (!initialized) { out.add("Rendu : pas encore initialisé"); return; }
-        StringBuilder gpuLine = new StringBuilder("GPU (moy.) :");
+        if (failed) { out.add("Render: disabled (see the log)"); return; }
+        if (!initialized) { out.add("Render: not initialized yet"); return; }
+        StringBuilder gpuLine = new StringBuilder("GPU (avg):");
         double total = 0;
         for (int s = 0; s < T_NAMES.length; s++) {
             double ms = timer.avgMs(s);
@@ -273,17 +273,17 @@ public final class GsrRenderer {
             gpuLine.append(String.format(" %s %.2f ms,", T_NAMES[s], ms));
         }
         gpuLine.append(String.format(" total %.2f ms", total));
-        out.add(standalone ? gpuLine.toString() : "GPU : mode service (shaderpack) ou autonome coupé, passes non dispatchées");
-        out.add(String.format("Téléversement : %d pages à la dernière frame, CPU %.2f ms (moy.)", lastUploads, uploadCpuMs));
+        out.add(standalone ? gpuLine.toString() : "GPU: service mode (shaderpack) or standalone off, passes not dispatched");
+        out.add(String.format("Upload: %d pages in the last frame, CPU %.2f ms (avg)", lastUploads, uploadCpuMs));
         long ssbo = GsrFrameData.BYTES + (long) cfg.totalSlots() * (dev.gsr.core.GsrLayout.PAGE_META_BYTES
                 + dev.gsr.core.GsrLayout.CELLS_PER_PAGE * dev.gsr.core.GsrLayout.CELL_BYTES
                 + (long) cfg.maxSplatsPerPage * dev.gsr.core.GsrLayout.SPLAT_BYTES);
-        out.add(String.format("VRAM : SSBO %.1f Mio, cibles écran %.1f Mio (%dx%d, reflet 1/%d)",
+        out.add(String.format("VRAM: SSBO %.1f MiB, screen targets %.1f MiB (%dx%d, reflection 1/%d)",
                 ssbo / 1048576.0, targets.bytes() / 1048576.0, Math.max(0, targets.width), Math.max(0, targets.height),
                 cfg.standaloneResolutionScale));
     }
 
-    /** Changement de monde : l'historique temporel n'a plus de sens. */
+    /** World change: the temporal history no longer makes sense. */
     public void resetHistory() { prevCam = null; targets.historyValid = false; }
 
     // ------------------------------------------------------------------ helpers

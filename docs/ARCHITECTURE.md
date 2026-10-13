@@ -1,431 +1,433 @@
-# GSR — Gaussian Space Reflections : architecture
+# GSR — Gaussian Space Reflections: architecture
 
-Mod Fabric (Minecraft 1.21.1, Yarn) ajoutant des reflets hybrides : **SSR** quand l'information est
-à l'écran, **champ de Gaussiennes 3D à 360°** autour du joueur quand elle ne l'est pas, ciel analytique
-en dernier recours. Aucun ray tracing matériel : uniquement OpenGL 4.3 (compute + SSBO).
+> Credits: All the code of this mod was written by Claude (Anthropic), an AI agent, under the direction and with the review of Rimuru, who tested it in game and validated each step. The original idea for GSR came from Garloulou.
 
-## 1. Vue d'ensemble
+Fabric mod (Minecraft 1.21.1, Yarn) adding hybrid reflections: **SSR** when the information is
+on screen, a **360° 3D Gaussian field** around the player when it is not, and an analytic sky
+as a last resort. No hardware ray tracing: OpenGL 4.3 only (compute + SSBO).
+
+## 1. Overview
 
 ```
- MONDE (ClientWorld)                CPU (workers)                         GPU
+ WORLD (ClientWorld)                CPU (workers)                         GPU
  ──────────────────                 ─────────────                         ───
- bloc modifié ─┐                                                    SSBO frame   (208 o)
- lumière ──────┼─► file de capture ─► snapshot  ──► SectionSummary ─┐  SSBO meta   (32 o / page)
- chunk chargé ─┘   (priorité         (copie         (mips 2/4/8 b)  │  SSBO cells  (512 / page)
-                    distance)        Paletted-                      │  SSBO splats (slab / page)
-                                     Container)  ┌─ si page L0 ─────┤        │
-                                                 ▼                  ▼        │
-                                         VoxelGrid 18³  ◄── résumés (L1..L3) │
-                                                 │                           │
-                                         SplatGenerator ──► PageData ──► upload (≤ N/frame)
-                                         (faces exposées → surfels gaussiens,
-                                          tri par cellule, budget par page)
+ block changed ─┐                                                    SSBO frame   (208 B)
+ light ─────────┼─► capture queue ─► snapshot  ──► SectionSummary ─┐  SSBO meta   (32 B / page)
+ chunk loaded ──┘   (distance        (copy of       (mips 2/4/8 b)  │  SSBO cells  (512 / page)
+                     priority)        Paletted-                     │  SSBO splats (slab / page)
+                                      Container)  ┌─ if L0 page ────┤        │
+                                                  ▼                 ▼        │
+                                          VoxelGrid 18³  ◄── summaries (L1..L3)
+                                                  │                          │
+                                          SplatGenerator ──► PageData ──► upload (≤ N/frame)
+                                          (exposed faces → Gaussian surfels,
+                                           per-cell sort, per-page budget)
 
- FRAME :  START ─ bind SSBO ─┬─ [mode autonome] LAST : reflect.comp ─► temporal.comp ─► composite.comp
-                             └─ [Iris actif]   le shaderpack appelle gsrTrace() dans sa passe de reflets
+ FRAME :  START ─ bind SSBO ─┬─ [standalone mode] LAST : reflect.comp ─► temporal.comp ─► composite.comp
+                             └─ [Iris active]     the shaderpack calls gsrTrace() in its own reflection pass
 ```
 
-| Paquet | Rôle | Dépend de MC |
+| Package | Role | Depends on MC |
 |---|---|---|
-| `dev.gsr.core` | clipmap, résumés, génération des splats, gestionnaire, format GPU, traceur CPU de référence | **non** (testé seul) |
-| `dev.gsr.mc` | snapshots de sections, table des matériaux, éclairage global | oui |
-| `dev.gsr.render` | SSBO, cibles écran, compilation et dispatch des compute shaders | oui (LWJGL) |
-| `dev.gsr.mixin` | 1 mixin sur `ClientWorld` | oui |
-| `assets/gsr/shaders` | `gsr_common.glsl` (traversée GSR), `gsr_screen.glsl`, 3 passes compute | — |
+| `dev.gsr.core` | clipmap, summaries, splat generation, manager, GPU format, reference CPU tracer | **no** (tested on its own) |
+| `dev.gsr.mc` | section snapshots, material table, global lighting | yes |
+| `dev.gsr.render` | SSBOs, screen targets, compute shader compilation and dispatch | yes (LWJGL) |
+| `dev.gsr.mixin` | 1 mixin on `ClientWorld` | yes |
+| `assets/gsr/shaders` | `gsr_common.glsl` (GSR traversal), `gsr_screen.glsl`, 3 compute passes | — |
 
-### Points d'intégration Fabric — et pourquoi ceux-là
+### Fabric integration points — and why these ones
 
-* **`ClientWorldMixin`** (`updateListeners`, `scheduleBlockRenders`) : seul mixin. On n'intercepte
-  **pas** le `ChunkBuilder` : Sodium le remplace entièrement (et Iris s'appuie sur Sodium). `ClientWorld`
-  n'est touché par aucun des deux → une seule base de code pour vanilla / Sodium / Iris.
-* **Fabric API** : `ClientChunkEvents` (chargement/déchargement), `ClientTickEvents` (planification),
-  `WorldRenderEvents.START/LAST/END` (GPU). Ces événements sont émis aussi sous Sodium.
-* **Iris** : quand un shaderpack est actif, le mode autonome se coupe et GSR devient un *service* :
-  ses 4 SSBO restent liés à des points de liaison fixes (10–13 par défaut) pendant toute la frame. Le
-  pack inclut `gsr_common.glsl` et appelle `gsrTrace()` dans sa propre passe de reflets, avec son vrai
-  G-buffer (normales, rugosité labPBR). Aucun mixin dans Iris → pas de fragilité de version.
-  Voir `IRIS_INTEGRATION.md`.
+* **`ClientWorldMixin`** (`updateListeners`, `scheduleBlockRenders`): the only mixin. We do **not**
+  intercept the `ChunkBuilder`: Sodium replaces it entirely (and Iris builds on Sodium). `ClientWorld`
+  is touched by neither → a single code base for vanilla / Sodium / Iris.
+* **Fabric API**: `ClientChunkEvents` (load/unload), `ClientTickEvents` (scheduling),
+  `WorldRenderEvents.START/LAST/END` (GPU). These events are also emitted under Sodium.
+* **Iris**: when a shaderpack is active, standalone mode is switched off and GSR becomes a *service*:
+  its 4 SSBOs stay bound to fixed binding points (10–13 by default) for the whole frame. The
+  pack includes `gsr_common.glsl` and calls `gsrTrace()` in its own reflection pass, with its real
+  G-buffer (normals, labPBR roughness). No mixin in Iris → no version fragility.
+  See `IRIS_INTEGRATION.md`.
 
-## 2. Génération dynamique des splats
+## 2. Dynamic splat generation
 
-**Choix : threads CPU asynchrones, pas de compute shader.** Les données de blocs vivent côté CPU ; les
-envoyer au GPU pour les convertir coûterait plus en bande passante (4096 états × 7 sections) que
-d'envoyer le résultat (quelques centaines de splats de 32 o). Le GPU est réservé au rendu.
+**Choice: asynchronous CPU threads, no compute shader.** The block data lives on the CPU; sending
+it to the GPU to convert it would cost more bandwidth (4096 states × 7 sections) than sending
+the result (a few hundred 32-byte splats). The GPU is reserved for rendering.
 
-1. **Snapshot (thread principal, ~µs)** : copie des `PalettedContainer` + `ChunkNibbleArray` de la
-   section et de ses 6 voisines de face. Les workers ne touchent jamais au monde vivant.
-2. **`SectionSummary` (worker)** : en une passe sur 4096 blocs, mips 1/2/3 (voxels de 2/4/8 blocs) :
-   genre majoritaire (seuil 50 %), albédo moyen *des blocs de surface*, lumière moyenne de l'air,
-   émission max. ≈ 4 Kio/section ; les sections d'air partagent un singleton.
-3. **`VoxelGrid` 18³** : grille unique pour tous les niveaux. L0 vient du snapshot ; L1–L3 sont
-   assemblés **uniquement depuis les résumés** (une page L3 couvre 512 sections : relire 2 M de blocs
-   serait prohibitif).
-4. **`SplatGenerator`** : une gaussienne par **face exposée** (voisin = air, ou opaque contre
-   translucide). L'intérieur des montagnes ne coûte rien. Chaque splat est un *surfel* gaussien oblate :
-   `Σ = σt²(I − nnᵀ) + σn²nnᵀ` avec σt = 0,55 voxel, σn = 0,1 voxel.
-   Au-delà du budget (2048/page), on garde en priorité les faces exposées au ciel.
-   Tri par cellule (2³ voxels) par counting sort → table `offset | count<<16`.
-5. **Anti-rebond** : les pages grossières sont reconstruites après 300 ms (L1), 0,9 s (L2), 2,7 s (L3),
-   et seulement si l'empreinte du résumé a changé (un changement de lumière invisible à 8 blocs de
-   résolution ne coûte rien).
+1. **Snapshot (main thread, ~µs)**: copy of the `PalettedContainer` + `ChunkNibbleArray` of the
+   section and of its 6 face neighbors. Workers never touch the live world.
+2. **`SectionSummary` (worker)**: in one pass over 4096 blocks, mips 1/2/3 (voxels of 2/4/8 blocks):
+   majority kind (50 % threshold), average albedo *of the surface blocks*, average air light,
+   max emission. ≈ 4 KiB/section; air sections share a singleton.
+3. **18³ `VoxelGrid`**: a single grid for all levels. L0 comes from the snapshot; L1–L3 are
+   assembled **only from the summaries** (an L3 page covers 512 sections: re-reading 2 M blocks
+   would be prohibitive).
+4. **`SplatGenerator`**: one Gaussian per **exposed face** (neighbor = air, or opaque against
+   translucent). The interior of mountains costs nothing. Each splat is an oblate Gaussian *surfel*:
+   `Σ = σt²(I − nnᵀ) + σn²nnᵀ` with σt = 0.55 voxel, σn = 0.1 voxel.
+   Beyond the budget (2048/page), faces exposed to the sky are kept first.
+   Per-cell (2³ voxels) counting sort → `offset | count<<16` table.
+5. **Debouncing**: coarse pages are rebuilt after 300 ms (L1), 0.9 s (L2), 2.7 s (L3),
+   and only if the summary fingerprint changed (a light change invisible at 8-block
+   resolution costs nothing).
 
-Format d'un splat (std430, 32 o) :
+Splat format (std430, 32 B):
 
-| champ | contenu |
+| field | contents |
 |---|---|
-| `posSigmaT.xyz` | position **relative à l'origine de la page** (pas de perte de précision à ±30 M blocs) |
-| `posSigmaT.w` | σ tangentiel |
-| `data.x` | albédo sRGB + opacité `0xAARRGGBB` |
-| `data.y` | normale octaédrique 8+8 · lumière ciel/bloc 4+4 · émission 4 · niveau 2 · sans ombrage 1 (bit 30) |
-| `data.z` | σ normal (bits float) |
-| `data.w` | réservé (ID matériau, rugosité réfléchie…) |
+| `posSigmaT.xyz` | position **relative to the page origin** (no precision loss at ±30 M blocks) |
+| `posSigmaT.w` | tangential σ |
+| `data.x` | sRGB albedo + opacity `0xAARRGGBB` |
+| `data.y` | octahedral normal 8+8 · sky/block light 4+4 · emission 4 · level 2 · unshaded 1 (bit 30) |
+| `data.z` | normal σ (float bits) |
+| `data.w` | reserved (material ID, reflected roughness…) |
 
-Les splats ne stockent **pas** de radiance : seulement albédo + niveaux de lumière. L'éclairage
-(soleil, heure, pluie, dimension) est appliqué au moment de l'échantillonnage → le cycle jour/nuit ne
-déclenche aucune reconstruction.
+Splats do **not** store radiance: only albedo + light levels. Lighting
+(sun, time of day, rain, dimension) is applied at sampling time → the day/night cycle
+triggers no rebuild.
 
-## 3. Mémoire : la clipmap gaussienne en cascade
+## 3. Memory: the cascaded Gaussian clipmap
 
-| Niveau | Voxel | Page | Fenêtre 8×4×8 pages | Usage |
+| Level | Voxel | Page | 8×4×8-page window | Use |
 |---|---|---|---|---|
-| L0 | 1 bloc | 16 blocs (= 1 section) | ±64 h / ±32 v | reflets nets proches (miroirs, eau calme) |
-| L1 | 2 blocs | 32 | ±128 / ±64 | |
-| L2 | 4 blocs | 64 | ±256 / ±128 | |
-| L3 | 8 blocs | 128 | ±512 / ±256 | relief lointain, reflets rugueux |
+| L0 | 1 block | 16 blocks (= 1 section) | ±64 h / ±32 v | sharp nearby reflections (mirrors, calm water) |
+| L1 | 2 blocks | 32 | ±128 / ±64 | |
+| L2 | 4 blocks | 64 | ±256 / ±128 | |
+| L3 | 8 blocks | 128 | ±512 / ±256 | distant terrain, rough reflections |
 
-* **Stockage toroïdal** : la page `p` occupe le slot `floorMod(p, dims)`. Quand le joueur avance, seules
-  les pages qui entrent dans la fenêtre sont reconstruites ; rien n'est copié ni décalé en VRAM.
-* **Slot = adresse** : 1 page ↔ 1 slab fixe → aucun allocateur, aucune fragmentation. La méta
-  `GsrPageMeta { ivec4(pageXYZ, count); uvec4 mask }` permet au shader de rejeter un slot périmé ;
-  `mask.xy` est le **masque de briques** : 1 bit par brique de 2×2×2 cellules (4³ voxels), 64 par page.
-* **Budget par défaut** : 1024 slots × 64 Kio = **64 Mio** de splats + 2 Mio de cellules + 32 Kio de
-  méta. Réglable (`pagesX/Y/Z`, `levels`, `maxSplatsPerPage`).
-* Cibles écran du mode autonome : profondeur opaque en pleine résolution (4 o/pixel) + reflet,
-  historique et distance en basse résolution (32 o/texel). En demi-résolution (défaut) : 12 o/pixel,
-  ≈ 40 Mio en 2560×1369 (calculé ; 120 Mio mesurés en pleine résolution).
+* **Toroidal storage**: page `p` occupies slot `floorMod(p, dims)`. When the player moves, only
+  the pages entering the window are rebuilt; nothing is copied or shifted in VRAM.
+* **Slot = address**: 1 page ↔ 1 fixed slab → no allocator, no fragmentation. The
+  `GsrPageMeta { ivec4(pageXYZ, count); uvec4 mask }` meta lets the shader reject a stale slot;
+  `mask.xy` is the **brick mask**: 1 bit per brick of 2×2×2 cells (4³ voxels), 64 per page.
+* **Default budget**: 1024 slots × 64 KiB = **64 MiB** of splats + 2 MiB of cells + 32 KiB of
+  meta. Configurable (`pagesX/Y/Z`, `levels`, `maxSplatsPerPage`).
+* Standalone-mode screen targets: full-resolution opaque depth (4 B/pixel) + reflection,
+  history and distance at low resolution (32 B/texel). At half resolution (default): 12 B/pixel,
+  ≈ 40 MiB at 2560×1369 (computed; 120 MiB measured at full resolution).
 
-### Demi-résolution (`standaloneResolutionScale`, `/gsr scale 1|2`)
-Les passes 1 et 2 travaillent sur une grille ÷`scale`. Chaque texel choisit un **pixel représentatif**
-dans son bloc `scale²` : le premier, dans un ordre fixe, qui porte un reflet (`gsrRepresentative`).
-Un bloc à cheval sur un bord d'eau garde donc un échantillon d'eau, et le choix est déterministe :
-les deux passes retrouvent le même pixel sans cible intermédiaire. La passe temporelle lit
-l'historique décalé de (centre du texel − pixel représentatif). Sans ce décalage, chaque frame
-rééchantillonnerait l'historique d'¼ de texel, ce qui flouterait l'image en continu même caméra immobile.
-La composition (pleine résolution) agrège les 4 texels voisins avec une **pondération bilinéaire ×
-similarité de distance caméra** (tolérance 2 % + 5 cm). Cette distance est celle de la cible
-`distance` de la passe temporelle. Avec `scale = 1`, on retrouve exactement l'ancien comportement.
+### Half resolution (`standaloneResolutionScale`, `/gsr scale 1|2`)
+Passes 1 and 2 work on a grid ÷`scale`. Each texel picks a **representative pixel**
+in its `scale²` block: the first one, in a fixed order, that carries a reflection (`gsrRepresentative`).
+A block straddling a water edge therefore keeps a water sample, and the choice is deterministic:
+both passes find the same pixel without an intermediate target. The temporal pass reads the
+history offset by (texel center − representative pixel). Without this offset, every frame
+would resample the history by ¼ texel, which would continuously blur the image even with a still camera.
+The composite (full resolution) aggregates the 4 neighboring texels with **bilinear weighting ×
+camera-distance similarity** (tolerance 2 % + 5 cm). This distance is that of the temporal pass's
+`distance` target. With `scale = 1`, the old behavior is recovered exactly.
 
-## 4. Pipeline de rendu
+## 4. Rendering pipeline
 
-### Passe 0 — `gsr_depthcopy.comp` : masque matériau du mode autonome (sans mixin)
-Sans G-buffer, le mode autonome doit deviner *où* refléter. Un simple masque « normale vers le haut »
-transformait herbe et cimes d'arbres en miroirs (voile laiteux aux angles rasants, vu en jeu). À
-`WorldRenderEvents.BEFORE_DEBUG_RENDER` — vérifié dans le bytecode de `WorldRenderer#render` 1.21.1 :
-le rendu debug précède la couche translucide — on copie la profondeur **opaque** (R32F). Aux passes
-suivantes, un pixel dont la profondeur finale est plus proche que l'opaque (marge 0,02 + 0,2 % de la
-distance) porte une surface translucide (eau, glace, verre) → reflet à pleine force ; les sols opaques
-orientés vers le haut reçoivent `standaloneFloorStrength` (0 par défaut). En mode « Fabuleux », l'eau
-est dans le framebuffer translucide : les passes lisent alors sa profondeur. Si la copie n'a pas eu lieu
-pendant la frame (redimensionnement), le reflet est sauté plutôt que faux.
+### Pass 0 — `gsr_depthcopy.comp`: standalone-mode material mask (no mixin)
+Without a G-buffer, standalone mode has to guess *where* to reflect. A simple "normal pointing up" mask
+turned grass and treetops into mirrors (milky veil at grazing angles, seen in game). At
+`WorldRenderEvents.BEFORE_DEBUG_RENDER` — verified in the bytecode of `WorldRenderer#render` 1.21.1:
+debug rendering precedes the translucent layer — the **opaque** depth is copied (R32F). In the following
+passes, a pixel whose final depth is closer than the opaque depth (margin 0.02 + 0.2 % of the
+distance) carries a translucent surface (water, ice, glass) → full-strength reflection; upward-facing
+opaque floors receive `standaloneFloorStrength` (0 by default). In "Fabulous" mode, water
+is in the translucent framebuffer: the passes then read its depth. If the copy did not happen
+during the frame (resize), the reflection is skipped rather than wrong.
 
-### Passe 1 — `gsr_reflect.comp` : SSR → GSR → ciel
-1. Normale (reconstruite depuis la profondeur en mode autonome ; G-buffer sous Iris), rugosité, masque.
-2. Direction : `reflect()` si rugosité < 0,03, sinon microfacette **GGX VNDF** (Heitz 2018) tirée avec
-   IGN + séquence R2 décalée par frame.
-3. **SSR** : marche en espace écran à z interpolé en perspective + raffinement binaire. Confiance = 0 si
-   le rayon sort de l'écran **ou passe derrière un objet** (épaisseur dépassée), fondu près des bords (sur les 2 % les plus proches, `smoothstep(0,96 ; 1)` ; 7,5 % avant le 2026-10-13, reflets flous au bord).
-4. **Repli GSR** si confiance < 1 : `gsrTrace()` = cône-marche dans la clipmap. À chaque pas :
-   * niveau = le plus fin dont le voxel (2^L) ≥ empreinte du cône **et** dont la fenêtre contient le
-     point (`coneTan` = f(rugosité) : un reflet flou utilise d'office des splats plus gros → moins de pas) ;
-   * page absente/vide → saut d'une page entière ; brique vide (bit nul dans la méta, déjà lue) →
-     saut de 4³ voxels sans lire `cells[]` ; sinon évaluation des splats de la cellule ;
-   * **intégrale analytique de la gaussienne le long du rayon** (pas de rastérisation, pas de tri) :
-     `t* = −dᵀΣ⁻¹o / dᵀΣ⁻¹d`, `m² = oᵀΣ⁻¹o − (dᵀΣ⁻¹o)²/dᵀΣ⁻¹d`, `α = op·min(1, 1,6·e^(−m²/2))`
-     (noyau « à sommet plat » : un mur pavé de surfels est réellement opaque) ;
-   * composition avant→arrière exacte entre cellules (DDA), moyenne pondérée α dans une cellule ;
-   * surfels à sens unique (pas d'auto-intersection, pas de fuite à travers une face).
-5. `mix(GSR + T·ciel, SSR, confiance)` ; sortie rgb + distance d'impact.
+### Pass 1 — `gsr_reflect.comp`: SSR → GSR → sky
+1. Normal (reconstructed from depth in standalone mode; G-buffer under Iris), roughness, mask.
+2. Direction: `reflect()` if roughness < 0.03, otherwise **GGX VNDF** microfacet (Heitz 2018) sampled with
+   IGN + R2 sequence offset per frame.
+3. **SSR**: screen-space march with perspective-interpolated z + binary refinement. Confidence = 0 if
+   the ray leaves the screen **or passes behind an object** (thickness exceeded), fade near the edges (over the closest 2 %, `smoothstep(0.96 ; 1)`; 7.5 % before 2026-10-13, blurry reflections at the edge).
+4. **GSR fallback** if confidence < 1: `gsrTrace()` = cone-march in the clipmap. At each step:
+   * level = the finest one whose voxel (2^L) ≥ the cone footprint **and** whose window contains the
+     point (`coneTan` = f(roughness): a blurry reflection automatically uses larger splats → fewer steps);
+   * page missing/empty → skip a whole page; empty brick (zero bit in the meta, already read) →
+     skip 4³ voxels without reading `cells[]`; otherwise evaluate the cell's splats;
+   * **analytic integral of the Gaussian along the ray** (no rasterization, no sorting):
+     `t* = −dᵀΣ⁻¹o / dᵀΣ⁻¹d`, `m² = oᵀΣ⁻¹o − (dᵀΣ⁻¹o)²/dᵀΣ⁻¹d`, `α = op·min(1, 1.6·e^(−m²/2))`
+     ("flat-top" kernel: a wall tiled with surfels is really opaque);
+   * exact front-to-back compositing between cells (DDA), α-weighted average within a cell;
+   * one-way surfels (no self-intersection, no leaking through a face).
+5. `mix(GSR + T·sky, SSR, confidence)`; output rgb + hit distance.
 
-> Pourquoi un cône-marche et pas un « buffer GSR projeté » ? Une projection des splats depuis la caméra
-> ne contient, par construction, que ce que la caméra voit — exactement la limite du SSR. Pour les rayons
-> hors écran il faut interroger la représentation 3D dans une direction arbitraire. La grille de cellules
-> par page rend cette requête bornée (~80 cellules dans le pire cas pour un rayon miroir de 512 blocs).
+> Why a cone-march and not a "projected GSR buffer"? Projecting the splats from the camera
+> only contains, by construction, what the camera sees — exactly the limit of SSR. For rays
+> off screen, the 3D representation has to be queried in an arbitrary direction. The cell grid
+> per page makes this query bounded (~80 cells in the worst case for a 512-block mirror ray).
 
-### Passe 2 — `gsr_temporal.comp` : accumulation
-* **Reprojection hybride** selon la rugosité : surface (rugueux) vs **image virtuelle** `P + V·d_impact`
-  (lisse) — le reflet d'un miroir suit la parallaxe de l'objet réfléchi.
-* Rejet de désocclusion via la distance caméra de la frame précédente (cible R32F ping-pong).
-* Clipping YCoCg du voisinage 3×3 : γ = 1 (lisse, serré) → 2,5 (rugueux, large).
-* Historique : 12 frames max (lisse : pas de traînées) → 48 (rugueux : élimine le bruit GGX).
+### Pass 2 — `gsr_temporal.comp`: accumulation
+* **Hybrid reprojection** depending on roughness: surface (rough) vs **virtual image** `P + V·d_impact`
+  (smooth) — a mirror's reflection follows the parallax of the reflected object.
+* Disocclusion rejection via the previous frame's camera distance (ping-pong R32F target).
+* YCoCg clipping of the 3×3 neighborhood: γ = 1 (smooth, tight) → 2.5 (rough, wide).
+* History: 12 frames max (smooth: no trails) → 48 (rough: removes GGX noise).
 
-**Limite honnête** : l'accumulation supprime le bruit et le crénelage, mais elle ne crée pas de détail
-au-delà de la résolution des splats (1 bloc en L0). Les détails plus fins qu'un bloc viennent du SSR ;
-pour aller plus loin, il faut subdiviser les faces L0 (2×2 surfels colorés depuis l'atlas).
+**Honest limitation**: accumulation removes noise and aliasing, but it does not create detail
+beyond the splat resolution (1 block in L0). Details finer than a block come from SSR;
+to go further, L0 faces would need to be subdivided (2×2 surfels colored from the atlas).
 
-### Passe 3 — `gsr_composite.comp`
-Fresnel via approximation analytique de la BRDF d'environnement (Karis), F0 = 0,02 ; mélange en
-linéaire, écriture `rgba8` dans le framebuffer principal **avant** la main et le HUD.
+### Pass 3 — `gsr_composite.comp`
+Fresnel via an analytic approximation of the environment BRDF (Karis), F0 = 0.02; blending in
+linear, `rgba8` written into the main framebuffer **before** the hand and the HUD.
 
-## 5. Threads, synchronisation, robustesse
+## 5. Threads, synchronization, robustness
 
-* Thread client : événements, captures (budget 48/tick, plus proches d'abord), planification, uploads
-  (budget 32 pages/frame), rendu.
-* Workers (`cores/4`, priorité basse) : résumés + génération. Données immuables en entrée, `PageData`
-  en sortie via file sans verrou.
-* **Versionnage par page** : un résultat est jeté si une génération plus récente a été lancée ou si la
-  page est sortie de la fenêtre entre-temps.
-* Ordre d'upload : splats → cellules → méta (la méta valide la page en dernier).
-* État GL : programme, unité active et textures 0–5 relus puis restaurés à l'identique (cohérence du
-  cache `GlStateManager`). Les SSBO et unités d'image ne sont pas utilisés par Minecraft.
-* Pas d'OpenGL 4.3 (macOS) → GSR se désactive proprement. **Détection** : Minecraft demande un contexte
-  3.2 Core et les pilotes AMD annoncent alors exactement « 3.2 » (vu en jeu : `3.2.0 Core Profile
-  Context` sur RX 7800 XT, GLSL 4.60), donc `GLCapabilities.OpenGL43` est faux. On accepte aussi
+* Client thread: events, captures (budget 48/tick, nearest first), scheduling, uploads
+  (budget 32 pages/frame), rendering.
+* Workers (`cores/4`, low priority): summaries + generation. Immutable input data, `PageData`
+  as output through a lock-free queue.
+* **Per-page versioning**: a result is discarded if a more recent generation was started or if the
+  page left the window in the meantime.
+* Upload order: splats → cells → meta (the meta validates the page last).
+* GL state: program, active unit and textures 0–5 are read back then restored identically (consistency of the
+  `GlStateManager` cache). SSBOs and image units are not used by Minecraft.
+* No OpenGL 4.3 (macOS) → GSR disables itself cleanly. **Detection**: Minecraft requests a 3.2 Core
+  context and AMD drivers then report exactly "3.2" (seen in game: `3.2.0 Core Profile
+  Context` on RX 7800 XT, GLSL 4.60), so `GLCapabilities.OpenGL43` is false. We also accept
   `ARB_compute_shader + ARB_shader_storage_buffer_object + ARB_shader_image_load_store +
-  ARB_texture_storage` avec GLSL ≥ 4.30 (LWJGL partage les pointeurs de fonctions core/ARB).
+  ARB_texture_storage` with GLSL ≥ 4.30 (LWJGL shares function pointers between core/ARB).
 
-## 6. État et feuille de route
+## 6. State and roadmap
 
-**Vérifié** : tout `dev.gsr.core` compile et passe 33 vérifications (`CoreSelfTest`, dont les stats, la file de captures et le masque de briques) : format std430, clé de
-section signée, budget et tri par cellule, résumés, et — via `CpuReferenceTracer`, miroir ligne à ligne
-de `gsrTrace()` sur les mêmes octets — impacts au sol (L0), sur un pilier hors fenêtre L0 (trouvé en
-L1), dans l'eau translucide, en cône rugueux, après destruction de blocs et après recentrage toroïdal.
+**Verified**: all of `dev.gsr.core` compiles and passes 42 checks (`CoreSelfTest`, including stats, the capture queue and the brick mask): std430 format, signed section
+key, budget and per-cell sort, summaries, and — via `CpuReferenceTracer`, the line-by-line mirror
+of `gsrTrace()` on the same bytes — hits on the ground (L0), on a pillar outside the L0 window (found in
+L1), in translucent water, in a rough cone, after block destruction and after toroidal recentering.
 
-**Vérifié le 2026-10-13** (Windows 11, RX 7800 XT, pilote AMD 26.8.1, vanilla sans Sodium/Iris) :
-* compilation contre Minecraft 1.21.1 / Yarn build.3 / Fabric API 0.115.0 (versions de
-  `gradle.properties` inchangées) ; cibles du mixin (`updateListeners`, `scheduleBlockRenders`) vues
-  dans le jar remappé avec les bonnes signatures ;
-* chargement : mod initialisé, entrée dans un monde solo sans exception, les 4 compute shaders
-  compilent et se lient sur le pilote AMD ;
-* rendu (captures d'écran, caméra immobile) : l'eau reflète le relief et le soleil, l'herbe et les
-  arbres ne sont plus réfléchissants, main et HUD intacts.
+**Verified on 2026-10-13** (Windows 11, RX 7800 XT, AMD driver 26.8.1, vanilla without Sodium/Iris):
+* compilation against Minecraft 1.21.1 / Yarn build.3 / Fabric API 0.115.0 (versions in
+  `gradle.properties` unchanged); mixin targets (`updateListeners`, `scheduleBlockRenders`) seen
+  in the remapped jar with the right signatures;
+* loading: mod initialized, entering a singleplayer world without exception, the 4 compute shaders
+  compile and link on the AMD driver;
+* rendering (screenshots, still camera): water reflects terrain and the sun, grass and
+  trees are no longer reflective, hand and HUD intact.
 
-* reflet du soleil validé par l'utilisateur : disque `pow(sd, 3000) × 20`, compression logarithmique
-  au-delà d'une luminance de 8 (`gsr_composite.comp`) ;
-* stabilité en mouvement : aucun scintillement constaté par l'utilisateur (en marchant et en tournant
-  la caméra au bord de l'eau) ;
-* `/gsr stats` (commande client) : pages valides / non vides / splats par niveau, files, temps GPU
-  par passe (requêtes `GL_TIME_ELAPSED` en anneau de 4 frames, jamais bloquantes), VRAM.
+* sun reflection validated by the user: disc `pow(sd, 3000) × 20`, logarithmic compression
+  beyond a luminance of 8 (`gsr_composite.comp`);
+* stability in motion: no flicker observed by the user (walking and turning
+  the camera at the water's edge);
+* `/gsr stats` (client command): valid / non-empty pages / splats per level, queues, GPU time
+  per pass (`GL_TIME_ELAPSED` queries in a 4-frame ring, never blocking), VRAM.
 
-**Mesures de référence** (avant toute optimisation ; 2560×1369, RX 7800 XT, plaine + lac, jour) :
+**Reference measurements** (before any optimization; 2560×1369, RX 7800 XT, plain + lake, daytime):
 
-| Passe | Immobile face à l'eau | Après 10 s de course |
+| Pass | Still, facing water | After 10 s of running |
 |---|---|---|
-| copie profondeur | 0,02 ms | 0,02 ms |
-| reflet (SSR + GSR) | 2,48 ms | 1,93 ms |
-| temporel | 0,32 ms | 0,44 ms |
-| composition | 0,13 ms | 0,08 ms |
-| **total** | **2,95 ms** | **2,47 ms** |
+| depth copy | 0.02 ms | 0.02 ms |
+| reflection (SSR + GSR) | 2.48 ms | 1.93 ms |
+| temporal | 0.32 ms | 0.44 ms |
+| composite | 0.13 ms | 0.08 ms |
+| **total** | **2.95 ms** | **2.47 ms** |
 
-Splats chargés : ≈ 60–80 k (L0), 120–160 k (L1), 100–115 k (L2), 15–18 k (L3) ; VRAM 66 Mio de SSBO
-+ 120 Mio de cibles écran (36 o/pixel). Téléversements à l'arrêt : 0 page/frame.
+Loaded splats: ≈ 60–80 k (L0), 120–160 k (L1), 100–115 k (L2), 15–18 k (L3); VRAM 66 MiB of SSBO
++ 120 MiB of screen targets (36 B/pixel). Uploads when stopped: 0 pages/frame.
 
-**Bug corrigé grâce à ces stats** : la file de captures restait à ~100 000 entrées. La couverture L3
-(±512 blocs) dépasse la distance de rendu ; chaque section non chargée consommait une capture du
-budget, si bien que la file ne se vidait jamais. Désormais seule une vraie copie consomme le budget
-(tentatives plafonnées à 64 × budget par tick). Test de non-régression dans `CoreSelfTest`.
+**Bug fixed thanks to these stats**: the capture queue stayed at ~100,000 entries. L3 coverage
+(±512 blocks) exceeds the render distance; every unloaded section consumed a capture from the
+budget, so the queue never drained. Now only a real copy consumes the budget
+(attempts capped at 64 × budget per tick). Regression test in `CoreSelfTest`.
 
-**Demi-résolution (2026-10-13), vérifiée en jeu** : pas de liseré aux bords de l'eau ni autour des
-silhouettes (constaté par l'utilisateur). Mesures `/gsr stats` au même endroit, face à l'eau
-(2560×1369, RX 7800 XT) :
+**Half resolution (2026-10-13), verified in game**: no fringe at water edges or around
+silhouettes (observed by the user). `/gsr stats` measurements at the same spot, facing water
+(2560×1369, RX 7800 XT):
 
-| Passe | `/gsr scale 1` | `/gsr scale 2` (défaut) |
+| Pass | `/gsr scale 1` | `/gsr scale 2` (default) |
 |---|---|---|
-| copie profondeur | 0,02 ms | 0,02 ms |
-| reflet (SSR + GSR) | 2,49 ms | **0,81 ms** |
-| temporel | 0,41 ms | 0,33 ms |
-| composition | 0,13 ms | 0,08 ms |
-| **total** | **3,04 ms** | **1,24 ms** (−59 %) |
-| cibles écran (VRAM) | 120,3 Mio | 40,1 Mio |
+| depth copy | 0.02 ms | 0.02 ms |
+| reflection (SSR + GSR) | 2.49 ms | **0.81 ms** |
+| temporal | 0.41 ms | 0.33 ms |
+| composite | 0.13 ms | 0.08 ms |
+| **total** | **3.04 ms** | **1.24 ms** (−59 %) |
+| screen targets (VRAM) | 120.3 MiB | 40.1 MiB |
 
-Le temporel ne gagne presque rien : la recherche du pixel représentatif (jusqu'à 4 reconstructions de
-normale par texel) compense la réduction du nombre de pixels. Corrigé plus bas : la passe reflet écrit
-l'indice du représentant, le temporel le relit.
+The temporal pass gains almost nothing: the search for the representative pixel (up to 4 normal
+reconstructions per texel) offsets the reduction in pixel count. Fixed further down: the reflection pass writes
+the index of the representative, the temporal pass reads it back.
 
-**Vérifié le 2026-10-13 (2e session, captures automatiques `-PgsrCmds`, fenêtre 854×480)** :
-scintillement mesuré par `tools/FlickerDiff` (part des pixels d'eau dont l'amplitude dépasse 16/255,
-caméra figée) :
+**Verified on 2026-10-13 (2nd session, automatic captures `-PgsrCmds`, 854×480 window)**:
+flicker measured by `tools/FlickerDiff` (share of water pixels whose amplitude exceeds 16/255,
+camera frozen):
 
-| Configuration | Résultat | Mod coupé | Mod actif |
+| Configuration | Result | Mod off | Mod on |
 |---|---|---|---|
-| Nuit (`time set 18000`) | eau légèrement assombrie, colline reflétée, pas de surbrillance | — | — |
-| Pluie | reflet du ciel gris, gouttes dessinées par-dessus | — | — |
-| Nether | changement de dimension propre, lave opaque non réfléchissante, 0,03 ms GPU | — | — |
-| Sodium 0.6.13 | reflets corrects, main et HUD intacts | 1,52 % | 0,40 % |
-| Iris 1.8.8 sans shaderpack | mode autonome, reflets corrects | 0,84 % | 0,37 % |
-| Iris 1.8.8 + Complementary Reimagined r5.9.3 | mode service (passes autonomes coupées), aucune exception | — | — |
-| Iris 1.8.8 + Complementary Unbound r5.9.3 (2026-10-13) | mode service, aucune exception ; reflets du pack seuls (aucun appel à `gsrTrace()`) | — | — |
-| Mode « Fabuleux » | reflets corrects (profondeur lue dans le framebuffer translucide) | 1,89 % | 0,64 % |
+| Night (`time set 18000`) | water slightly darkened, hill reflected, no bright highlights | — | — |
+| Rain | gray sky reflection, drops drawn on top | — | — |
+| Nether | clean dimension change, opaque lava not reflective, 0.03 ms GPU | — | — |
+| Sodium 0.6.13 | correct reflections, hand and HUD intact | 1.52 % | 0.40 % |
+| Iris 1.8.8 without shaderpack | standalone mode, correct reflections | 0.84 % | 0.37 % |
+| Iris 1.8.8 + Complementary Reimagined r5.9.3 | service mode (standalone passes off), no exception | — | — |
+| Iris 1.8.8 + Complementary Unbound r5.9.3 (2026-10-13) | service mode, no exception; the pack's own reflections only (no call to `gsrTrace()`) | — | — |
+| "Fabulous" mode | correct reflections (depth read from the translucent framebuffer) | 1.89 % | 0.64 % |
 
-Tests de compatibilité : `./gradlew runClient -PwithSodium` ou `-PwithIris` (Sodium + Iris + leurs
-bibliothèques jcpp / glsl-transformer / antlr, non chargées depuis le jar d'Iris en dev). Sodium 0.6.13
-exige Loom ≥ 1.8.9 : le projet est passé en Loom 1.8. Les erreurs `[MIXIN] Cannot resolve class
-org/lwjgl/glfw/GLFW` au démarrage viennent de la pré-vérification de Sodium en dev, sans conséquence.
-Avec Complementary, le mode service n'est vérifié qu'en « ne plante pas » (le pack n'appelle pas `gsrTrace()`) ; voir le pack de test plus bas.
+Compatibility tests: `./gradlew runClient -PwithSodium` or `-PwithIris` (Sodium + Iris + their
+jcpp / glsl-transformer / antlr libraries, not loaded from the Iris jar in dev). Sodium 0.6.13
+requires Loom ≥ 1.8.9: the project moved to Loom 1.8. The `[MIXIN] Cannot resolve class
+org/lwjgl/glfw/GLFW` errors at startup come from Sodium's pre-check in dev, and are harmless.
+With Complementary, service mode is only verified as "does not crash" (the pack does not call `gsrTrace()`); see the test pack further down.
 
-**Non vérifié** : pilotes NVIDIA/Intel ; un vrai shaderpack public intégrant GSR (seul le pack de test minimal est vérifié).
+**Not verified**: NVIDIA/Intel drivers; a real public shaderpack integrating GSR (only the minimal test pack is verified).
 
-**Passe temporelle allégée (2026-10-13)** : la passe reflet écrit l'indice du pixel représentatif qu'elle a
-choisi (cible `R8UI` basse résolution, 1 o/texel) ; la passe temporelle le relit au lieu de refaire la
-recherche (jusqu'à 4 reconstructions de normale par texel). Même position, même vue (2560×1369, RX 7800 XT) :
-temporel **0,13 → 0,07 ms**, total 0,78 → 0,72 ms. Images avant/après identiques hors animation de la
-texture d'eau (vues `raw` et `hit` : < 0,03 % de pixels différents).
+**Lightened temporal pass (2026-10-13)**: the reflection pass writes the index of the representative pixel it
+chose (low-resolution `R8UI` target, 1 B/texel); the temporal pass reads it back instead of redoing the
+search (up to 4 normal reconstructions per texel). Same position, same view (2560×1369, RX 7800 XT):
+temporal **0.13 → 0.07 ms**, total 0.78 → 0.72 ms. Before/after images identical apart from the
+water texture animation (`raw` and `hit` views: < 0.03 % of pixels differ).
 
-**Mode service vérifié avec un pack qui appelle `gsrTrace()` (2026-10-13)** : pack de test minimal
-`examples/gsr-testpack` (eau marquée dans `colortex2` par `gbuffers_water`, `composite` en
-`#version 430 compatibility` qui inclut `/lib/gsr_common.glsl` et trace le reflet **uniquement** par
-`gsrTrace()`, sans SSR). `./gradlew gsrTestPack` l'assemble dans `run/shaderpacks/GSR-TestPack` (fait
-automatiquement avec `-PwithIris`). Iris 1.8.8 + Sodium 0.6.13, AMD : le pack compile, les SSBO liés aux
-points 10–13 sont lus, l'eau reflète la colline, les arbres et le cerisier, aucune erreur dans le log.
+**Service mode verified with a pack that calls `gsrTrace()` (2026-10-13)**: minimal test pack
+`examples/gsr-testpack` (water marked in `colortex2` by `gbuffers_water`, `composite` in
+`#version 430 compatibility` which includes `/lib/gsr_common.glsl` and traces the reflection **only**
+through `gsrTrace()`, without SSR). `./gradlew gsrTestPack` assembles it into `run/shaderpacks/GSR-TestPack` (done
+automatically with `-PwithIris`). Iris 1.8.8 + Sodium 0.6.13, AMD: the pack compiles, the SSBOs bound to
+points 10–13 are read, the water reflects the hill, the trees and the cherry tree, no errors in the log.
 
-**Problèmes résolus (vérifiés par l'utilisateur le 2026-10-13, commit `c30a21b`)** : plus de
-scintillement de l'eau en marchant et en tournant la caméra, plus de nuage vert au ras de l'eau. Les
-corrections de couleur et du SSR (`2265201`) suffisaient.
+**Problems solved (verified by the user on 2026-10-13, commit `c30a21b`)**: no more
+water flicker when walking and turning the camera, no more green cloud at water level. The
+color and SSR fixes (`2265201`) were enough.
 
-**Nuance marron au bord de l'écran : corrigée** (2026-10-13, vue de l'utilisateur rejouée en mode
-spectateur). Près du bord, le SSR passe la main au GSR. Deux défauts du GSR y donnaient un reflet de terre
-ou de ciel au lieu de l'herbe :
-1. Les plantes (herbes hautes, fleurs, fougères, canne à sucre) étaient de l'air dans
-   `BlockMaterialTable` : sous une prairie, le reflet GSR montrait le ciel, ou le talus en terre derrière.
-   Elles sont maintenant `KIND_TRANSLUCENT`, avec pour opacité la couverture moyenne de leurs textures
-   (bornée 40..200), si leur contour fait au moins ½ bloc de haut et 6/16 de large (torches, rails et
-   nénuphars exclus).
-2. Les surfels débordaient de leur face : opaques jusqu'à ~0,53 voxel du centre, encore ~55 % à 0,8. Le
-   flanc immergé d'un bloc de rive masquait donc, au-dessus de l'eau, les touffes et le talus.
-   `gsrTrace()` et `CpuReferenceTracer` découpent désormais chaque splat au carré de sa face
-   (`GSR_EDGE_SOFT` = `EDGE_SOFT` = 0,15 voxel de fondu). Un point n'étant plus couvert que par un splat,
-   `baseOpacity` passe de 0,95 à 1,0 (sinon 5 % de ciel traversait les sols). Tests ajoutés : « rayon
-   rasant au-dessus de la berge » (T = 0,364 avant, > 0,95 après) et « rayon sous l'eau vers la berge ».
-   Le test du masque de briques tolère maintenant 1/1000 d'écarts. Le parcours sans masque (debug)
-   n'applique pas la borne de niveau du cône dans les cellules occupées, et 1 rayon rugueux sur 4000 y
-   manque un sol que L2 contient. Avant, le débordement des disques masquait cet écart.
+**Brown tint at the screen edge: fixed** (2026-10-13, user's view replayed in spectator
+mode). Near the edge, SSR hands over to GSR. Two GSR defects there produced an earth or sky
+reflection instead of grass:
+1. Plants (tall grass, flowers, ferns, sugar cane) were air in
+   `BlockMaterialTable`: under a meadow, the GSR reflection showed the sky, or the dirt bank behind.
+   They are now `KIND_TRANSLUCENT`, with the average coverage of their textures as opacity
+   (clamped 40..200), if their outline is at least ½ block tall and 6/16 wide (torches, rails and
+   lily pads excluded).
+2. Surfels overflowed their face: opaque up to ~0.53 voxel from the center, still ~55 % at 0.8. The
+   submerged side of a shore block therefore hid, above the water, the tufts and the bank.
+   `gsrTrace()` and `CpuReferenceTracer` now clip each splat to the square of its face
+   (`GSR_EDGE_SOFT` = `EDGE_SOFT` = 0.15 voxel of fade). A point no longer being covered by more than one splat,
+   `baseOpacity` goes from 0.95 to 1.0 (otherwise 5 % of the sky came through the floors). Tests added: "grazing
+   ray above the shore" (T = 0.364 before, > 0.95 after) and "ray under the water towards the shore".
+   The brick mask test now tolerates 1/1000 mismatches. The unmasked traversal (debug)
+   does not apply the cone's level bound in occupied cells, and 1 rough ray in 4000 there
+   misses a floor that L2 contains. Before, the disc overflow hid this discrepancy.
 
-Mesure au bord gauche (x = 60, sous la berge) : #757875 (ciel délavé) avant, #445859 (herbe sombre)
-après. Outils ajoutés : `/gsr debug raw` (reflet GSR sans Fresnel) et `/gsr debug hit` (r =
-transmittance, g = distance / 16, b = (niveau + 1) / 4), capturés aussi par l'autoshot. Limite : le
-reflet GSR d'une touffe reste un voile vert flou (σ = 0,55 bloc), moins net que le SSR.
+Measurement at the left edge (x = 60, under the shore): #757875 (washed-out sky) before, #445859 (dark grass)
+after. Tools added: `/gsr debug raw` (GSR reflection without Fresnel) and `/gsr debug hit` (r =
+transmittance, g = distance / 16, b = (level + 1) / 4), also captured by the autoshot. Limitation: the
+GSR reflection of a tuft remains a blurry green veil (σ = 0.55 block), less sharp than SSR.
 
-**Touffes assombries et bords de reflets agités en rotation : corrigés** (2026-10-13, signalés par
-l'utilisateur après le correctif ci-dessus) :
-* *Herbes plus sombres dans le reflet GSR que dans le SSR.* Vanilla dessine les plantes en croix sans
-  ombrage par face (`"shade": false` dans `block/cross.json`, vérifié dans le jar 1.21.1) ; le GSR leur
-  appliquait 0,6 / 0,8 sur les côtés. `BlockMaterialTable` marque les modèles dont aucun quad n'est ombré,
-  `VoxelSource#unshaded` → `VoxelGrid` (niveau 0 seulement) → bit 30 de `data.y` → `gsrShadeSplat` prend
-  un ombrage de 1,0. Test : « Plantes en croix » dans `CoreSelfTest`.
-* *Bords des reflets qui « bouillonnent » quand on tourne la caméra (pas en avançant).* En rotation pure,
-  chaque rayon de reflet est le même dans le monde : seul le tirage GGX par frame varie. Avec la rugosité
-  par défaut de 0,08 (héritée de l'import initial), ±0,7° de dispersion, soit un demi-bloc à 40 blocs ; la
-  passe temporelle en moyenne le bruit, mais en rotation la reprojection et le clipping de voisinage font
-  changer la silhouette d'une frame à l'autre (vu frame par frame sur les arbres de gauche, demi et pleine
-  résolution). En miroir (rugosité 0), les silhouettes glissent sans se déformer, aux deux résolutions, et
-  le reflet est nettement plus net (le flou venait de l'accumulation du bruit). **Rugosité autonome par
-  défaut : 0** (eau calme = miroir). Le chemin GGX reste pour les shaderpacks et `standaloneRoughness` > 0,03.
-* Outils : `/gsr debug refl` (reflet hybride SSR + GSR après la passe temporelle, sans Fresnel ni scène) ;
-  autoshot `-PgsrVideo=<frames>,<degrés>` (« vidéo » : rotation d'un pas fixe à **chaque frame**, capture
-  juste après le rendu du monde, équivalente à un film à très haute cadence), `-PgsrMove=dx,dy,dz,dyaw`
-  (rafales par tick avec caméra en mouvement), `-PgsrBursts=refl,refl+scale1,refl+mirror,...`
-  (configurations de rafale combinables) ; `tools/JerkDiff.java` (écart de chaque frame à la moyenne de ses
-  voisines, carte de chaleur). JerkDiff ne départage pas les cas : un reflet plus net contient plus de
-  détails, donc plus d'à-coups légitimes ; le diagnostic s'est fait sur bandes d'images frame par frame.
-* Testé à la résolution de l'utilisateur (fenêtre 2560×1369) ; les seuils du SSR et de l'upsampling sont en
-  espace vue ou relatifs à la taille d'écran, la demi-résolution suit `uScreenSize`. Non testé à d'autres
-  tailles de fenêtre.
-* *Herbes reflétées comme des cubes verts translucides* (capture utilisateur `claudemaisblock.png`). Un
-  voxel de plante était un voile uniforme sur toute sa face : sous une prairie, le repli GSR montrait des
-  cubes pâles aux bords droits. Les faces latérales des plantes (bit 30) sont maintenant découpées en 4 brins
-  verticaux de hauteurs pseudo-aléatoires (hachage de la position du splat, 0,45 à 1 voxel), pleins au pied
-  et fondus sur 0,25 voxel en haut ; opacité × 1,7 pour garder la couverture moyenne de la texture
-  (`gsrTuft`, miroir `CpuReferenceTracer#tuft`, 3 tests). Vérifié en A/B à la même position
-  (`tp @s 130.13 62.68 113.65 -119.4 15.3` dans « GSR Repro ») : cubes avant, silhouettes de touffes après.
-  L'autoshot fige maintenant la caméra pendant les vues (la souris de l'utilisateur la déplaçait).
-* *Reflets flous près du bord de l'écran.* Le SSR passait la main au GSR (une couleur par face, flou) dès
-  7,5 % du bord (`smoothstep(0,85 ; 1)` sur la position d'impact), soit ~190 px à 2560 de large. Bande
-  réduite à 2 % (0,96). A/B à la même position : la touffe reflétée au bord droit montre ses brins au lieu
-  d'un voile ; pas de couture visible, ni en rotation (vidéo 24 frames à 0,5°/frame). Les reflets restent
-  GSR, donc flous, là où le SSR n'a pas l'information (rayon caché par un premier plan, caméra au ras de
-  l'eau) : c'est le rôle du repli. L'autoshot libère le curseur (la souris ne tourne plus la caméra).
-* Remarqué, non corrigé : la matrice de projection de Minecraft inclut le balancement de la vue en marchant,
-  l'œil n'est donc pas exactement à l'origine de l'espace vue alors que les shaders prennent `normalize(P)`
-  comme direction de vue (erreur ~1° près de la caméra). L'utilisateur ne voit pas de défaut en avançant.
+**Darkened tufts and agitated reflection edges when rotating: fixed** (2026-10-13, reported by
+the user after the fix above):
+* *Grass darker in the GSR reflection than in SSR.* Vanilla draws cross-shaped plants without
+  per-face shading (`"shade": false` in `block/cross.json`, verified in the 1.21.1 jar); GSR
+  applied 0.6 / 0.8 on the sides. `BlockMaterialTable` marks models where no quad is shaded,
+  `VoxelSource#unshaded` → `VoxelGrid` (level 0 only) → bit 30 of `data.y` → `gsrShadeSplat` takes
+  a shading of 1.0. Test: "Cross plants" in `CoreSelfTest`.
+* *Reflection edges that "boil" when rotating the camera (not when moving forward).* In pure rotation,
+  each reflection ray is the same in the world: only the per-frame GGX sample varies. With the
+  default roughness of 0.08 (inherited from the initial import), ±0.7° of spread, i.e. half a block at 40 blocks; the
+  temporal pass averages the noise, but in rotation the reprojection and neighborhood clipping
+  make the silhouette change from one frame to the next (seen frame by frame on the trees on the left, half and full
+  resolution). In mirror mode (roughness 0), silhouettes slide without deforming, at both resolutions, and
+  the reflection is markedly sharper (the blur came from the accumulation of noise). **Default standalone
+  roughness: 0** (calm water = mirror). The GGX path remains for shaderpacks and `standaloneRoughness` > 0.03.
+* Tools: `/gsr debug refl` (hybrid SSR + GSR reflection after the temporal pass, without Fresnel or scene);
+  autoshot `-PgsrVideo=<frames>,<degrees>` ("video": rotation by a fixed step on **every frame**, capture
+  right after world rendering, equivalent to a very-high-frame-rate film), `-PgsrMove=dx,dy,dz,dyaw`
+  (per-tick bursts with a moving camera), `-PgsrBursts=refl,refl+scale1,refl+mirror,...`
+  (combinable burst configurations); `tools/JerkDiff.java` (deviation of each frame from the average of its
+  neighbors, heat map). JerkDiff does not settle the cases: a sharper reflection contains more
+  detail, hence more legitimate jerks; the diagnosis was made on frame-by-frame image strips.
+* Tested at the user's resolution (2560×1369 window); the SSR and upsampling thresholds are in
+  view space or relative to the screen size, half resolution follows `uScreenSize`. Not tested at other
+  window sizes.
+* *Grass reflected as translucent green cubes* (user capture `claudemaisblock.png`). A
+  plant voxel was a uniform veil over its whole face: under a meadow, the GSR fallback showed pale
+  cubes with straight edges. The side faces of plants (bit 30) are now cut into 4
+  vertical blades of pseudo-random heights (hash of the splat position, 0.45 to 1 voxel), solid at the base
+  and fading over 0.25 voxel at the top; opacity × 1.7 to keep the average coverage of the texture
+  (`gsrTuft`, mirror `CpuReferenceTracer#tuft`, 3 tests). Verified in A/B at the same position
+  (`tp @s 130.13 62.68 113.65 -119.4 15.3` in "GSR Repro"): cubes before, tuft silhouettes after.
+  The autoshot now freezes the camera during the views (the user's mouse was moving it).
+* *Blurry reflections near the screen edge.* SSR handed over to GSR (one color per face, blurry) from
+  7.5 % of the edge (`smoothstep(0.85 ; 1)` on the hit position), i.e. ~190 px at 2560 wide. Band
+  reduced to 2 % (0.96). A/B at the same position: the reflected tuft at the right edge shows its blades instead
+  of a veil; no visible seam, including in rotation (24-frame video at 0.5°/frame). Reflections remain
+  GSR, hence blurry, where SSR does not have the information (ray hidden by a foreground, camera at water level):
+  that is the role of the fallback. The autoshot releases the cursor (the mouse no longer turns the camera).
+* Noticed, not fixed: Minecraft's projection matrix includes the view bobbing when walking,
+  so the eye is not exactly at the origin of view space while the shaders take `normalize(P)`
+  as the view direction (error ~1° near the camera). The user sees no defect when moving forward.
 
-Historique du diagnostic :
-* **Scintillement de l'eau** signalé par l'utilisateur, absent avant le masque de briques et la
-  demi-résolution. Encore présent après la borne de LOD du masque (`7ecff59`). **Pas revérifié depuis
-  les corrections de couleur et du SSR** (`2265201`) : une alternance SSR/GSR de couleurs très
-  différentes d'une frame à l'autre était une cause probable. Diagnostic prévu :
-  `/gsr bricks off`, puis `/gsr scale 1`, pour isoler la cause. Une mesure objective est possible :
-  plusieurs captures caméra immobile, puis différence des pixels de l'eau.
-* **Mesure objective du 2026-10-13 (caméra figée, commit suivant `7058515`)** : rafales de 8 captures
-  à un tick d'intervalle (`-PgsrAutoshot`, puis `java tools/FlickerDiff.java ...`), zone d'eau, part des
-  pixels dont l'amplitude temporelle dépasse 16/255 : mod coupé 1,49 % (animation de l'eau vanilla),
-  défaut 0,30 %, sans briques 0,32 %, pleine résolution 1,04 %, GSR seul 0,25 %. **Caméra immobile, le
-  mod ne scintille pas** (il lisse même l'animation). Reste à vérifier en mouvement, où la reprojection
-  temporelle intervient : la mesure automatique ne le couvre pas.
-* **« Nuage » de pixels verts au-dessus de l'eau** quand la caméra est presque au ras de l'eau (capture
-  utilisateur 17:35). Probablement le même amas vert GSR, non revérifié.
-* Le gain de 0,81 → 0,13 ms vu avant la borne de LOD était faux (rayons qui rataient). La bonne
-  mesure est 0,51 ms.
+Diagnostic history:
+* **Water flicker** reported by the user, absent before the brick mask and the
+  half resolution. Still present after the mask's LOD bound (`7ecff59`). **Not rechecked since
+  the color and SSR fixes** (`2265201`): an SSR/GSR alternation of very
+  different colors from one frame to the next was a probable cause. Planned diagnosis:
+  `/gsr bricks off`, then `/gsr scale 1`, to isolate the cause. An objective measurement is possible:
+  several still-camera captures, then difference of the water pixels.
+* **Objective measurement of 2026-10-13 (camera frozen, commit following `7058515`)**: bursts of 8 captures
+  one tick apart (`-PgsrAutoshot`, then `java tools/FlickerDiff.java ...`), water area, share of
+  pixels whose temporal amplitude exceeds 16/255: mod off 1.49 % (vanilla water animation),
+  default 0.30 %, without bricks 0.32 %, full resolution 1.04 %, GSR only 0.25 %. **With a still camera, the
+  mod does not flicker** (it even smooths the animation). Still to be verified in motion, where temporal
+  reprojection comes into play: the automatic measurement does not cover it.
+* **"Cloud" of green pixels** above the water when the camera is almost at water level (user
+  capture 17:35). Probably the same green GSR blob, not rechecked.
+* The 0.81 → 0.13 ms gain seen before the LOD bound was wrong (rays that missed). The correct
+  measurement is 0.51 ms.
 
-**Teinte de biome (faite, 2026-10-13, vérifiée en jeu)** :
-* La composition des quads est **affine en la teinte** : par groupe de faces, couleur = A + B ⊙ teinte
-  / 255 (A = partie non teintée, B = texture des quads teintés). `BlockMaterialTable` stocke A, B et un
-  type de teinte (aucune, herbe, feuillage, eau). Le type se déduit en comparant
-  `BlockColors.getColor(state, null, null, i)` à `GrassColors/FoliageColors.getDefaultColor()`. Les
-  teintes constantes (bouleau, épicéa, redstone) sont figées dans A. L'eau (et les blocs immergés) :
-  A = 0, B = blanc. 9241 états teintés sur 26684 (surtout des variantes `waterlogged`).
-* `McSnapshotSource` lit `ClientWorld#getColor(pos, BiomeColors.GRASS/FOLIAGE/WATER_COLOR)` (déjà lissé
-  par le « biome blend ») au centre de chaque carré 4×4 de la section, à mi-hauteur, soit 16 lectures
-  par type, et seulement pour les types présents dans la palette de la section. Interpolation
-  bilinéaire par colonne ; les voisins de bordure prennent la colonne la plus proche. Le cœur n'a
-  pas changé : le snapshot renvoie directement l'albédo teinté, et les résumés L1–L3 en héritent.
-* Vérification : `/gsr stats` affiche la teinte sous le joueur et l'albédo du dessus d'un bloc
-  d'herbe. Au marécage (775, 2041) : herbe #677039, eau #617B64 → dessus d'herbe #3B4121 (plaine
-  #476D3E) ; la vue `/gsr debug gsr` y montre un reflet olive sombre.
-* Limites : canne à sucre (teinte `-1` sans monde) classée non teintée ; une seule hauteur par
-  section (biomes 3D des grottes approchés).
-* Changement de pack de ressources (F3+T, menu) : un `SimpleSynchronousResourceReloadListener`
-  (après `MODELS`) reconstruit la table, la passe à `McSnapshotSource` et recapture les colonnes
-  chargées. Vérifié (autoshot `f3t`) : table reconstruite en 60 ms, 609 colonnes recapturées, files
-  vides et reflets intacts ensuite, aucune exception.
+**Biome tint (done, 2026-10-13, verified in game)**:
+* Quad composition is **affine in the tint**: per face group, color = A + B ⊙ tint
+  / 255 (A = untinted part, B = texture of the tinted quads). `BlockMaterialTable` stores A, B and a
+  tint type (none, grass, foliage, water). The type is deduced by comparing
+  `BlockColors.getColor(state, null, null, i)` to `GrassColors/FoliageColors.getDefaultColor()`. Constant
+  tints (birch, spruce, redstone) are baked into A. Water (and submerged blocks):
+  A = 0, B = white. 9241 tinted states out of 26684 (mostly `waterlogged` variants).
+* `McSnapshotSource` reads `ClientWorld#getColor(pos, BiomeColors.GRASS/FOLIAGE/WATER_COLOR)` (already smoothed
+  by "biome blend") at the center of each 4×4 square of the section, at mid-height, i.e. 16 reads
+  per type, and only for the types present in the section's palette. Bilinear
+  interpolation per column; border neighbors take the nearest column. The core did not
+  change: the snapshot directly returns the tinted albedo, and the L1–L3 summaries inherit it.
+* Verification: `/gsr stats` displays the tint under the player and the albedo of the top of a grass
+  block. In the swamp (775, 2041): grass #677039, water #617B64 → grass top #3B4121 (plain
+  #476D3E); the `/gsr debug gsr` view shows a dark olive reflection there.
+* Limitations: sugar cane (tint `-1` without a world) classified as untinted; a single height per
+  section (3D cave biomes approximated).
+* Resource pack change (F3+T, menu): a `SimpleSynchronousResourceReloadListener`
+  (after `MODELS`) rebuilds the table, passes it to `McSnapshotSource` and recaptures the loaded
+  columns. Verified (autoshot `f3t`): table rebuilt in 60 ms, 609 columns recaptured, queues
+  empty and reflections intact afterwards, no exception.
 
-**Configuration (faite)** : `config/gsr.json` lu au démarrage par `GsrConfigFile` (Gson), réécrit avec
-les champs manquants et les valeurs bornées par `GsrConfig#validate()` ; un fichier illisible est
-conservé et les valeurs par défaut utilisées. `/gsr reload` applique à chaud les champs de rendu et de
-budget ; niveaux, pages, splats/page, point de liaison SSBO et threads au prochain démarrage
-(`copyRuntimeFrom` le signale). σ et opacité ne s'appliquent qu'aux pages régénérées.
+**Configuration (done)**: `config/gsr.json` read at startup by `GsrConfigFile` (Gson), rewritten with
+the missing fields and the values clamped by `GsrConfig#validate()`; an unreadable file is
+kept and the default values used. `/gsr reload` applies the rendering and budget fields live;
+levels, pages, splats/page, SSBO binding point and threads at the next startup
+(`copyRuntimeFrom` reports it). σ and opacity only apply to regenerated pages.
 
-Prochaines étapes, par ordre de rentabilité :
-1. ~~Reflet en **demi-résolution** + upsampling guidé par la profondeur~~ (fait : 3,04 → 1,24 ms).
-2. ~~**Masque d'occupation par page**~~ (fait, 2026-10-13). Choix : 64 bits par **brique** de 2³
-   cellules, rangés dans la méta, plutôt que 512 bits par cellule. Un masque par cellule ne ferait
-   qu'échanger la lecture de `cells[]` contre une autre lecture de même coût, sans réduire le nombre de
-   pas. La méta, elle, est déjà lue à chaque pas, et une brique vide se franchit en un pas au lieu de
-   2 à 4. Test CPU : rayon rasant à 4 blocs du sol, 6 pas sur 20 blocs au lieu de ≥ 10.
-   **Piège corrigé** : un saut de brique vide ne doit pas franchir la distance où l'empreinte du cône
-   dépasse 2^L (le niveau L+1 peut avoir du contenu dans la zone sautée). Sans cette borne, des rayons
-   rugueux rataient le relief, ce qui faisait scintiller l'eau. Comparaison CPU sur 4000 rayons aléatoires, avec et sans
-   masque : 0 écart (test permanent dans `CoreSelfTest`).
-   Mesuré en jeu (`/gsr bricks off|on`, même endroit face à l'eau) : reflet **0,67 → 0,51 ms**
-   (−24 %), total 1,20 → 1,12 ms.
-3. ~~Albédo depuis les **textures réelles**~~ (fait, 2026-10-13, sans teinte de biome). Une couleur par
-   **groupe de faces** (côtés / dessus / dessous) : `BlockMaterialTable` superpose les quads du modèle
-   cuit, teinte par défaut incluse, et relit les PNG via le gestionnaire de ressources (aucun access
-   widener) : 702 textures en ~100 ms au chargement du monde. Les résumés de section moyennent chaque groupe
-   séparément. Éclairage des splats aligné sur vanilla (lightmap, ombrage fixe par face, calcul en
-   sRGB) ; l'ancien modèle « soleil ×2,2 » reste disponible via `GSR_SHADE_PHYSICAL` pour les packs.
-   **Pourquoi** : en jeu, le reflet GSR d'une colline (herbe = vert `MapColor` sur toutes les faces, ×2
-   trop clair) formait un amas vert vif. Il ne se raccordait pas au SSR, d'où une bande verte qui
-   suivait le bord de l'écran, là où le SSR passe la main. Vérifié par captures `/gsr debug gsr` avant/après.
-   Teinte de biome par position : faite (voir plus haut).
-   Outils de diagnostic : `/gsr debug normal|ssr|gsr|raw|hit|refl`, `/gsr bricks on|off`, et
-   `gradlew runClient -PgsrAutoshot=<préfixe>` (5 captures automatiques, une par vue, dans `run/screenshots`).
-   `-PgsrCmds="tp @s x y z;time set 18000|gsr stats"` envoie des commandes 5 s après l'entrée dans le
-   monde (et la partie après `|`, 13 s avant les captures, qui commencent alors à 45 s).
-   Corrigés au passage : SSR, test d'épaisseur fait **après** le raffinement binaire (un pas grossier
-   rejetait à tort des collines visibles) ; normale reconstruite, plus de voisin hors écran au bord.
-4. Mode autonome : le masque par profondeur (passe 0) ne distingue pas l'eau du verre teinté ni de la
-   glace ; un vrai ID matériau demanderait un mixin sur le shader de terrain translucide, ou de le
-   laisser aux shaderpacks.
-5. Optimisation : réutiliser les sections clonées par Sodium (`@Pseudo` mixin sur sa tâche de
-   meshing) pour éviter la double lecture des blocs.
-6. Portage Vulkan : SSBO → storage buffers, `layout(set, binding)` ; le code GLSL n'utilise déjà aucune
-   uniforme hors bloc dans `gsr_common.glsl`.
+Next steps, in order of return on investment:
+1. ~~**Half-resolution** reflection + depth-guided upsampling~~ (done: 3.04 → 1.24 ms).
+2. ~~**Per-page occupancy mask**~~ (done, 2026-10-13). Choice: 64 bits per **brick** of 2³
+   cells, stored in the meta, rather than 512 bits per cell. A per-cell mask would only
+   trade the `cells[]` read for another read of the same cost, without reducing the number of
+   steps. The meta, on the other hand, is already read at every step, and an empty brick is crossed in one step instead of
+   2 to 4. CPU test: grazing ray 4 blocks above the ground, 6 steps over 20 blocks instead of ≥ 10.
+   **Pitfall fixed**: an empty-brick skip must not cross the distance where the cone footprint
+   exceeds 2^L (level L+1 may have content in the skipped area). Without this bound, rough rays
+   missed the terrain, which made the water flicker. CPU comparison on 4000 random rays, with and without
+   the mask: 0 mismatches (permanent test in `CoreSelfTest`).
+   Measured in game (`/gsr bricks off|on`, same spot facing water): reflection **0.67 → 0.51 ms**
+   (−24 %), total 1.20 → 1.12 ms.
+3. ~~Albedo from the **real textures**~~ (done, 2026-10-13, without biome tint). One color per
+   **face group** (sides / top / bottom): `BlockMaterialTable` superimposes the quads of the baked
+   model, default tint included, and re-reads the PNGs through the resource manager (no access
+   widener): 702 textures in ~100 ms when loading the world. Section summaries average each group
+   separately. Splat lighting aligned with vanilla (lightmap, fixed per-face shading, computation in
+   sRGB); the old "sun ×2.2" model remains available via `GSR_SHADE_PHYSICAL` for packs.
+   **Why**: in game, the GSR reflection of a hill (grass = `MapColor` green on all faces, ×2
+   too bright) formed a bright green blob. It did not blend with SSR, hence a green band that
+   followed the screen edge, where SSR hands over. Verified through `/gsr debug gsr` captures before/after.
+   Per-position biome tint: done (see above).
+   Diagnostic tools: `/gsr debug normal|ssr|gsr|raw|hit|refl`, `/gsr bricks on|off`, and
+   `gradlew runClient -PgsrAutoshot=<prefix>` (5 automatic captures, one per view, in `run/screenshots`).
+   `-PgsrCmds="tp @s x y z;time set 18000|gsr stats"` sends commands 5 s after entering the
+   world (and the part after `|`, 13 s before the captures, which then start at 45 s).
+   Fixed along the way: SSR, thickness test done **after** the binary refinement (a coarse step
+   wrongly rejected visible hills); reconstructed normal, no more off-screen neighbor at the edge.
+4. Standalone mode: the depth mask (pass 0) does not distinguish water from stained glass or
+   ice; a real material ID would require a mixin on the translucent terrain shader, or leaving it
+   to shaderpacks.
+5. Optimization: reuse the sections cloned by Sodium (`@Pseudo` mixin on its meshing
+   task) to avoid reading the blocks twice.
+6. Vulkan port: SSBO → storage buffers, `layout(set, binding)`; the GLSL code already uses no
+   uniform outside a block in `gsr_common.glsl`.

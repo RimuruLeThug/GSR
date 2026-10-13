@@ -1,18 +1,18 @@
-# Utiliser GSR depuis un shaderpack Iris
+# Using GSR from an Iris shaderpack
 
-Quand un shaderpack est actif, GSR ne dessine rien lui-même. À chaque frame (événement
-`WorldRenderEvents.START`), il met à jour et **lie ses 4 SSBO aux points de liaison 10 à 13**
-(configurable : `ssboBindingBase`). Les liaisons indexées SSBO sont un état global d'OpenGL : tout
-programme du pack qui déclare ces points de liaison lit directement la clipmap gaussienne.
+When a shaderpack is active, GSR does not draw anything itself. Every frame (`WorldRenderEvents.START`
+event), it updates and **binds its 4 SSBOs to binding points 10 to 13**
+(configurable: `ssboBindingBase`). Indexed SSBO bindings are global OpenGL state: any pack program
+that declares these binding points reads the Gaussian clipmap directly.
 
-Prérequis côté pack : `#version 430` (ou plus) dans le programme qui calcule les reflets, et ne pas
-utiliser lui-même les points de liaison 10–13 (`bufferObject.*` d'Iris utilise les index déclarés par
-le pack ; en cas de conflit, changez `ssboBindingBase`).
+Requirements on the pack side: `#version 430` (or higher) in the program that computes the reflections, and
+do not use binding points 10–13 yourself (Iris's `bufferObject.*` uses the indices declared by
+the pack; in case of a conflict, change `ssboBindingBase`).
 
-## Étapes
+## Steps
 
-1. Copier `gsr_common.glsl` dans le pack (ex. `shaders/lib/gsr_common.glsl`).
-2. Dans la passe de reflets (souvent un `deferred` ou `composite`) :
+1. Copy `gsr_common.glsl` into the pack (e.g. `shaders/lib/gsr_common.glsl`).
+2. In the reflection pass (often a `deferred` or `composite`):
 
 ```glsl
 #version 430 compatibility
@@ -23,50 +23,50 @@ le pack ; en cas de conflit, changez `ssboBindingBase`).
 #include "/lib/gsr_common.glsl"
 
 uniform mat4 gbufferModelViewInverse;
-// ... vos uniformes / samplers habituels (depthtex0, colortex*, etc.)
+// ... your usual uniforms / samplers (depthtex0, colortex*, etc.)
 
-// playerPos : position "player space" d'Iris = monde − cameraPosition (= espace GSR)
-// N : normale monde, rough : rugosité (labPBR : 1 − specular.r), lmSky : lumière du ciel au récepteur
+// playerPos: Iris "player space" position = world − cameraPosition (= GSR space)
+// N: world normal, rough: roughness (labPBR: 1 − specular.r), lmSky: sky light at the receiver
 vec3 reflection(vec3 playerPos, vec3 N, float rough, float lmSky,
                 vec2 ssrHitUV, float ssrConfidence, vec3 ssrColorLinear) {
     vec3 V = normalize(playerPos);
-    vec3 R = reflect(V, N);              // ou une direction GGX tirée, comme dans gsr_reflect.comp
+    vec3 R = reflect(V, N);              // or a sampled GGX direction, as in gsr_reflect.comp
     if (ssrConfidence >= 0.999) return ssrColorLinear;
 
     float coneTan = mix(0.002, 0.35, rough * rough);
     GsrHit h = gsrTrace(playerPos + N * 0.05, R, 0.02, 384.0, coneTan, 0.0);
-    // Le pack peut remplacer gsrSkyRadiance() par son propre ciel (texture de ciel, nuages...)
+    // The pack can replace gsrSkyRadiance() with its own sky (sky texture, clouds...)
     vec3 gsr = h.radiance + h.transmittance * gsrSkyRadiance(R) * lmSky;
     return mix(gsr, ssrColorLinear, ssrConfidence);
 }
 ```
 
-3. La distance `h.hitDist` peut alimenter la reprojection temporelle du pack (image virtuelle pour les
-   surfaces lisses, cf. `gsr_temporal.comp`).
+3. The distance `h.hitDist` can feed the pack's temporal reprojection (virtual image for smooth
+   surfaces, see `gsr_temporal.comp`).
 
 ## Notes
 
-* `gsrShadeSplat()` éclaire les splats avec le soleil/ciel fournis par GSR (`GsrLighting`). Un pack qui
-  veut son propre modèle d'éclairage (ombres, couleur de ciel) peut copier `gsrTrace()` et remplacer
-  l'appel à `gsrShadeSplat()` : les données brutes (albédo, normale, lumière ciel/bloc, émission) sont
-  disponibles dans `GsrSplat`.
-* Si GSR n'est pas installé, les SSBO ne sont pas liés : prévoir une option du pack (`#ifdef GSR`) qui
-  désactive l'appel.
+* `gsrShadeSplat()` lights the splats with the sun/sky provided by GSR (`GsrLighting`). A pack that
+  wants its own lighting model (shadows, sky color) can copy `gsrTrace()` and replace
+  the call to `gsrShadeSplat()`: the raw data (albedo, normal, sky/block light, emission) is
+  available in `GsrSplat`.
+* If GSR is not installed, the SSBOs are not bound: provide a pack option (`#ifdef GSR`) that
+  disables the call.
 
-## Pack de test
+## Test pack
 
-`examples/gsr-testpack` est un pack minimal qui suit exactement ces étapes (reflet de l'eau par
-`gsrTrace()` seul, sans SSR). `./gradlew gsrTestPack` le copie avec `gsr_common.glsl` dans
-`run/shaderpacks/GSR-TestPack` ; `./gradlew runClient -PwithIris` le fait automatiquement. Vérifié avec
-Iris 1.8.8 sur pilote AMD.
+`examples/gsr-testpack` is a minimal pack that follows exactly these steps (water reflection through
+`gsrTrace()` alone, without SSR). `./gradlew gsrTestPack` copies it together with `gsr_common.glsl` into
+`run/shaderpacks/GSR-TestPack`; `./gradlew runClient -PwithIris` does it automatically. Verified with
+Iris 1.8.8 on an AMD driver.
 
-## Packs Complementary (Reimagined, Unbound)
+## Complementary packs (Reimagined, Unbound)
 
-Vérifié le 2026-10-13 (r5.9.3, Iris 1.8.8, AMD) : avec GSR installé, les deux packs se chargent et
-s'affichent normalement, GSR passe en mode service. Ils n'appellent pas `gsrTrace()` : leurs reflets
-restent les leurs (marche en espace écran, puis ciel ou leurs reflets en espace monde voxelisés), sans
-apport de GSR. Le point d'accroche naturel serait `AddBackgroundReflection()` dans
-`lib/materials/materialMethods/reflections.glsl`, appelé quand leur marche écran échoue
-(`reflection.a < 1`). Leur licence (Complementary License 1.7) ne couvre pas la modification du code hors
-d'un « Modified Pack » redistribué sous conditions : l'intégration relève donc de leurs auteurs, ou d'un
-pack dérivé conforme à cette licence. Aucun fichier de ces packs n'est copié dans ce dépôt.
+Verified on 2026-10-13 (r5.9.3, Iris 1.8.8, AMD): with GSR installed, both packs load and
+display normally, and GSR switches to service mode. They do not call `gsrTrace()`: their reflections
+remain their own (screen-space marching, then sky or their voxelized world-space reflections), with no
+contribution from GSR. The natural hook point would be `AddBackgroundReflection()` in
+`lib/materials/materialMethods/reflections.glsl`, called when their screen-space march fails
+(`reflection.a < 1`). Their license (Complementary License 1.7) does not cover modifying the code outside
+a "Modified Pack" redistributed under conditions: integration is therefore up to their authors, or to a
+derived pack that complies with that license. No file from these packs is copied into this repository.

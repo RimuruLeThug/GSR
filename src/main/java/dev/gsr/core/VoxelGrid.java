@@ -1,18 +1,18 @@
 package dev.gsr.core;
 
 /**
- * Grille 18³ (16³ + bordure) de voxels d'une page, à la résolution de son niveau.
- * Format unique pour tous les niveaux : le même extracteur de surfaces sert de L0 à L3.
+ * 18³ grid (16³ + border) of voxels of a page, at the resolution of its level.
+ * Single format for all levels: the same surface extractor serves L0 to L3.
  */
 public final class VoxelGrid {
     public static final int N = GsrLayout.PAGE_VOXELS;
     private static final int S = N + 2;
 
     final byte[] kind = new byte[S * S * S];
-    final int[][] albedo = new int[GsrLayout.FACE_GROUPS][S * S * S];   // [groupe de faces][voxel]
+    final int[][] albedo = new int[GsrLayout.FACE_GROUPS][S * S * S];   // [face group][voxel]
     final byte[] light = new byte[S * S * S];
     final byte[] emission = new byte[S * S * S];
-    final boolean[] unshaded = new boolean[S * S * S];   // niveau 0 seulement
+    final boolean[] unshaded = new boolean[S * S * S];   // level 0 only
 
     private static int idx(int x, int y, int z) { return (x + 1) + S * ((y + 1) + S * (z + 1)); }
 
@@ -27,10 +27,10 @@ public final class VoxelGrid {
         if (x < 0 || x >= N) out++;
         if (y < 0 || y >= N) out++;
         if (z < 0 || z >= N) out++;
-        return out <= 1; // arêtes et coins de la bordure jamais lus
+        return out <= 1; // border edges and corners are never read
     }
 
-    /** Niveau 0 : directement depuis le snapshot pleine résolution de la section. */
+    /** Level 0: directly from the section's full-resolution snapshot. */
     public static VoxelGrid fromSource(VoxelSource src) {
         VoxelGrid g = new VoxelGrid();
         for (int z = -1; z <= N; z++)
@@ -50,14 +50,14 @@ public final class VoxelGrid {
         return g;
     }
 
-    /** Fournit le résumé d'une section, ou null si inconnue (traitée comme de l'air). */
+    /** Provides the summary of a section, or null if unknown (treated as air). */
     @FunctionalInterface
     public interface SummaryLookup { SectionSummary get(int sx, int sy, int sz); }
 
-    /** Niveaux 1..3 : assemblé à partir des résumés (mip = niveau) des (2^L)³ sections couvertes. */
+    /** Levels 1..3: assembled from the summaries (mip = level) of the covered (2^L)³ sections. */
     public static VoxelGrid fromSummaries(PageKey page, SummaryLookup lookup) {
         int L = page.level();
-        if (L < 1 || L > SectionSummary.MIPS) throw new IllegalArgumentException("niveau " + L);
+        if (L < 1 || L > SectionSummary.MIPS) throw new IllegalArgumentException("level " + L);
         VoxelGrid g = new VoxelGrid();
         int vb = 1 << L;
         int ox = page.originBlockX(), oy = page.originBlockY(), oz = page.originBlockZ();

@@ -6,7 +6,7 @@ version = project.mod_version
 group = 'dev.gsr'
 
 repositories {
-    maven { url = 'https://api.modrinth.com/maven' }   // Iris (API seulement, optionnelle)
+    maven { url = 'https://api.modrinth.com/maven' }   // Iris (API only, optional)
     mavenCentral()
 }
 
@@ -15,13 +15,13 @@ dependencies {
     mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
-    // Iris : compilation seulement, chargé dynamiquement via IrisCompat
+    // Iris: compile-time only, loaded dynamically via IrisCompat
     modCompileOnly "maven.modrinth:iris:${project.iris_version}"
-    // Compatibilité : ./gradlew runClient -PwithSodium ou -PwithIris (jamais embarqués dans le jar)
+    // Compatibility: ./gradlew runClient -PwithSodium or -PwithIris (never bundled into the jar)
     if (project.hasProperty("withSodium") || project.hasProperty("withIris")) modLocalRuntime "maven.modrinth:sodium:${project.sodium_version}"
     if (project.hasProperty("withIris")) {
         modLocalRuntime "maven.modrinth:iris:${project.iris_runtime_version}"
-        // Bibliothèques imbriquées dans le jar d'Iris, non chargées en environnement de dev
+        // Libraries nested inside Iris's jar, not loaded in the dev environment
         localRuntime "org.anarres:jcpp:1.4.14"
         localRuntime "io.github.douira:glsl-transformer:2.0.1"
         localRuntime "org.antlr:antlr4-runtime:4.13.1"
@@ -32,15 +32,15 @@ java {
     toolchain.languageVersion = JavaLanguageVersion.of(21)
 }
 
-// Tests du cœur (sans Minecraft) : ./gradlew coreSelfTest
+// Core tests (without Minecraft): ./gradlew coreSelfTest
 tasks.register('coreSelfTest', JavaExec) {
     dependsOn 'testClasses'
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'dev.gsr.core.CoreSelfTest'
 }
 
-// Développement : ./gradlew runClient -PgsrAutoshot=<préfixe> -> captures automatiques normal/ssr/gsr
-// dans run/screenshots (voir GsrClient#autoShot). -PgsrCmds="cmd1;cmd2" : commandes avant les captures.
+// Development: ./gradlew runClient -PgsrAutoshot=<prefix> -> automatic normal/ssr/gsr captures
+// in run/screenshots (see GsrClient#autoShot). -PgsrCmds="cmd1;cmd2": commands run before the captures.
 tasks.named('runClient', JavaExec) {
     if (project.hasProperty('gsrAutoshot')) systemProperty 'gsr.autoshot', project.property('gsrAutoshot')
     if (project.hasProperty('gsrCmds')) systemProperty 'gsr.autoshotCmds', project.property('gsrCmds')
@@ -54,8 +54,8 @@ processResources {
     filesMatching('fabric.mod.json') { expand 'version': project.version }
 }
 
-// Pack de test du mode service (examples/gsr-testpack + gsr_common.glsl) -> run/shaderpacks/GSR-TestPack.
-// À sélectionner dans Iris : ./gradlew runClient -PwithIris (shaderPack=GSR-TestPack dans run/config/iris.properties).
+// Service-mode test pack (examples/gsr-testpack + gsr_common.glsl) -> run/shaderpacks/GSR-TestPack.
+// To select in Iris: ./gradlew runClient -PwithIris (shaderPack=GSR-TestPack in run/config/iris.properties).
 tasks.register('gsrTestPack', Sync) {
     from('examples/gsr-testpack')
     from('src/main/resources/assets/gsr/shaders/gsr_common.glsl') { into 'shaders/lib' }

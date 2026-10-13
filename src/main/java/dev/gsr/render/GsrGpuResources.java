@@ -14,15 +14,15 @@ import java.nio.IntBuffer;
 import static org.lwjgl.opengl.GL43C.*;
 
 /**
- * Les 4 SSBO du GSR. Allocation fixe au démarrage (pas de fragmentation, pas de réallocation) :
+ * The 4 GSR SSBOs. Fixed allocation at startup (no fragmentation, no reallocation):
  *
- *  binding base+0  frame   : 208 o
- *  binding base+1  meta    : slots × 32 o              (ivec4 pageXYZ + count, uvec4 masque de briques)
- *  binding base+2  cells   : slots × 512 × 4 o         (offset | count << 16)
- *  binding base+3  splats  : slots × maxSplats × 32 o  (slab fixe par slot)
+ *  binding base+0  frame   : 208 B
+ *  binding base+1  meta    : slots × 32 B              (ivec4 pageXYZ + count, uvec4 brick mask)
+ *  binding base+2  cells   : slots × 512 × 4 B         (offset | count << 16)
+ *  binding base+3  splats  : slots × maxSplats × 32 B  (fixed slab per slot)
  *
- * Config par défaut : 4 niveaux × 256 slots = 1024 slots -> ~64 Mio de splats + 2 Mio de cellules.
- * Le slot d'une page est déterminé par la clipmap (toroïdal) : aucun allocateur nécessaire.
+ * Default config: 4 levels × 256 slots = 1024 slots -> ~64 MiB of splats + 2 MiB of cells.
+ * The slot of a page is determined by the clipmap (toroidal): no allocator needed.
  */
 public final class GsrGpuResources implements GpuSink {
     private final GsrConfig cfg;
@@ -60,7 +60,7 @@ public final class GsrGpuResources implements GpuSink {
 
     @Override
     public void upload(int slot, PageData page) {
-        // Ordre : données d'abord, méta en dernier (le shader valide la page via la méta).
+        // Order: data first, meta last (the shader validates the page via the meta).
         if (page.splatCount() > 0) {
             glBindBuffer(GL_SHADER_STORAGE_BUFFER, splatBuf);
             ByteBuffer src = page.splats().duplicate().position(0).limit(page.splatCount() * GsrLayout.SPLAT_BYTES);
@@ -81,7 +81,7 @@ public final class GsrGpuResources implements GpuSink {
 
     private void writeMeta(int slot, int x, int y, int z, int count, long brickMask) {
         metaScratch.clear();
-        // Little-endian : putLong écrit mask.x = bits 0..31 puis mask.y = bits 32..63.
+        // Little-endian: putLong writes mask.x = bits 0..31 then mask.y = bits 32..63.
         metaScratch.putInt(x).putInt(y).putInt(z).putInt(count).putLong(brickMask).putLong(0L).flip();
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, metaBuf);
         glBufferSubData(GL_SHADER_STORAGE_BUFFER, (long) slot * GsrLayout.PAGE_META_BYTES, metaScratch);
@@ -94,8 +94,8 @@ public final class GsrGpuResources implements GpuSink {
     }
 
     /**
-     * Liaisons indexées globales : elles restent actives pour TOUS les programmes de la frame,
-     * y compris ceux d'un shaderpack Iris qui déclare les mêmes points de liaison.
+     * Global indexed bindings: they stay active for ALL programs of the frame,
+     * including those of an Iris shaderpack that declares the same binding points.
      */
     public void bindAll() {
         int base = cfg.ssboBindingBase;

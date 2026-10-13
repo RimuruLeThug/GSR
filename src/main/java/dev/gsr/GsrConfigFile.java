@@ -12,12 +12,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * Lecture / écriture de config/gsr.json (Gson, fourni par Minecraft).
+ * Reads / writes config/gsr.json (Gson, provided by Minecraft).
  *
- * Champs absents : valeur par défaut de {@link GsrConfig}. Le fichier est réécrit après lecture pour
- * y faire apparaître les nouveaux champs et les valeurs corrigées par {@link GsrConfig#validate()}.
- * Un fichier illisible n'est jamais écrasé : on le signale et on garde les valeurs par défaut.
- * Les champs {@code transient} (debug) ne sont ni lus ni écrits.
+ * Missing fields: default value from {@link GsrConfig}. The file is rewritten after reading so that
+ * new fields and values corrected by {@link GsrConfig#validate()} appear in it.
+ * An unreadable file is never overwritten: it is reported and the default values are kept.
+ * {@code transient} fields (debug) are neither read nor written.
  */
 public final class GsrConfigFile {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -31,7 +31,7 @@ public final class GsrConfigFile {
                 JsonObject json = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8)).getAsJsonObject();
                 cfg = GSON.fromJson(json, GsrConfig.class);
             } catch (Exception e) {
-                GsrClient.LOG.error("GSR : {} illisible ({}), valeurs par défaut utilisées, fichier conservé", file, e.toString());
+                GsrClient.LOG.error("GSR: {} unreadable ({}), default values used, file kept", file, e.toString());
                 return safeValidate(new GsrConfig());
             }
         }
@@ -40,9 +40,9 @@ public final class GsrConfigFile {
             Files.createDirectories(file.getParent());
             Files.writeString(file, GSON.toJson(cfg), StandardCharsets.UTF_8);
         } catch (IOException e) {
-            GsrClient.LOG.warn("GSR : impossible d'écrire {} : {}", file, e.toString());
+            GsrClient.LOG.warn("GSR: unable to write {}: {}", file, e.toString());
         }
-        GsrClient.LOG.info("GSR : configuration lue depuis {}", file);
+        GsrClient.LOG.info("GSR: configuration read from {}", file);
         return cfg;
     }
 
@@ -50,7 +50,7 @@ public final class GsrConfigFile {
         try {
             return cfg.validate();
         } catch (IllegalArgumentException e) {
-            GsrClient.LOG.error("GSR : configuration invalide ({}), valeurs par défaut utilisées", e.getMessage());
+            GsrClient.LOG.error("GSR: invalid configuration ({}), default values used", e.getMessage());
             return new GsrConfig().validate();
         }
     }

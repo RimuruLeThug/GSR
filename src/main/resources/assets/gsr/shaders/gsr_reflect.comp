@@ -1,6 +1,6 @@
 // =============================================================================================
-//  GSR — Passe 1 : lancer de rayon hybride  SSR  ->  GSR (clipmap gaussienne)  ->  ciel
-//  Sortie : uReflOut.rgb = radiance réfléchie (linéaire), .a = distance d'impact (−1 = pas de reflet)
+//  GSR — Pass 1: hybrid ray tracing  SSR  ->  GSR (Gaussian clipmap)  ->  sky
+//  Output: uReflOut.rgb = reflected radiance (linear), .a = hit distance (−1 = no reflection)
 // =============================================================================================
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -10,23 +10,23 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0) uniform sampler2D uDepth;
 layout(binding = 1) uniform sampler2D uSceneColor;
 layout(rgba16f, binding = 0) writeonly uniform image2D uReflOut;
-layout(r8ui,    binding = 1) writeonly uniform uimage2D uReprOut;   // pixel représentatif, relu par le temporel
+layout(r8ui,    binding = 1) writeonly uniform uimage2D uReprOut;   // representative pixel, re-read by the temporal pass
 
 uniform float uMaxTrace;
-uniform int   uDebugView;   // 0 normal, 1 SSR seul (ciel en repli), 2 GSR seul, 3 GSR brut, 4 impact GSR, 5 reflet brut
+uniform int   uDebugView;   // 0 normal, 1 SSR only (sky fallback), 2 GSR only, 3 raw GSR, 4 GSR hit, 5 raw reflection
 
 const int SSR_STEPS  = 48;
 const int SSR_REFINE = 6;
 
 /*
- * SSR : marche linéaire en espace écran avec interpolation de z correcte en perspective
- * (on interpole z/w et 1/w), puis raffinement binaire. Retourne une confiance ∈ [0,1] :
- * 0 = le rayon sort de l'écran / passe derrière une occlusion -> repli GSR.
+ * SSR: linear screen-space march with perspective-correct z interpolation
+ * (we interpolate z/w and 1/w), then binary refinement. Returns a confidence ∈ [0,1]:
+ * 0 = the ray leaves the screen / passes behind an occluder -> GSR fallback.
  */
 float ssrTrace(vec3 vp, vec3 rv, ivec2 px, out vec2 hitUV, out float hitDist) {
     hitUV = vec2(0.0); hitDist = 0.0;
     float len = 96.0;
-    if (rv.z > 0.0) len = min(len, (-0.06 - vp.z) / rv.z);   // ne pas traverser le plan proche
+    if (rv.z > 0.0) len = min(len, (-0.06 - vp.z) / rv.z);   // do not cross the near plane
     if (len <= 0.05) return 0.0;
     vec3 ve = vp + rv * len;
     vec4 h0 = uProj * vec4(vp, 1.0), h1 = uProj * vec4(ve, 1.0);
@@ -44,10 +44,10 @@ float ssrTrace(vec3 vp, vec3 rv, ivec2 px, out vec2 hitUV, out float hitDist) {
         float rayZ   = mix(vp.z * k0, ve.z * k1, f) / mix(k0, k1, f);
         float sceneZ = gsrLinearViewZ(texelFetch(uDepth, ivec2(s), 0).r);
         if (rayZ < sceneZ) {
-            // Raffinement AVANT le test d'épaisseur : un pas grossier (jusqu'à ~20 px) sur une pente vue
-            // de biais dépasse largement l'épaisseur, ce qui faisait rater au SSR des objets bien visibles
-            // (colline réfléchie -> repli GSR flou). Seul l'écart au point affiné dit si le rayon passe
-            // vraiment derrière une silhouette.
+            // Refinement BEFORE the thickness test: a coarse step (up to ~20 px) on a slope seen at a
+            // grazing angle far exceeds the thickness, which made SSR miss clearly visible objects
+            // (reflected hill -> blurry GSR fallback). Only the gap at the refined point tells whether the
+            // ray really passes behind a silhouette.
             float lo = prevF, hi = f;
             for (int j = 0; j < SSR_REFINE; j++) {
                 float m = 0.5 * (lo + hi);
@@ -57,13 +57,13 @@ float ssrTrace(vec3 vp, vec3 rv, ivec2 px, out vec2 hitUV, out float hitDist) {
             }
             float hz = mix(vp.z * k0, ve.z * k1, hi) / mix(k0, k1, hi);
             float sz = gsrLinearViewZ(texelFetch(uDepth, ivec2(mix(s0, s1, hi)), 0).r);
-            if (sz - hz > max(0.3, -hz * 0.03)) return 0.0;   // passé DERRIÈRE un objet : info absente de l'écran
+            if (sz - hz > max(0.3, -hz * 0.03)) return 0.0;   // passed BEHIND an object: information absent from the screen
             hitUV = mix(s0, s1, hi) / uScreenSize;
             vec3 hp = mix(vp * k0, ve * k1, hi) / mix(k0, k1, hi);
             hitDist = length(hp - vp);
             vec2 e = abs(hitUV * 2.0 - 1.0);
-            // Fondu vers GSR sur les ~2 % les plus proches du bord seulement : le GSR (une couleur par face)
-            // est flou à côté du SSR, une bande de 7,5 % (0,85) se voyait comme un reflet flou au bord.
+            // Fade to GSR only over the ~2 % closest to the edge: GSR (one color per face)
+            // is blurry next to SSR, a 7.5 % band (0.85) showed up as a blurry reflection at the edge.
             return 1.0 - smoothstep(0.96, 1.0, max(e.x, e.y));
         }
         prevF = f;
@@ -72,7 +72,7 @@ float ssrTrace(vec3 vp, vec3 rv, ivec2 px, out vec2 hitUV, out float hitDist) {
 }
 
 void main() {
-    ivec2 lp = ivec2(gl_GlobalInvocationID.xy);   // texel de la cible (basse résolution)
+    ivec2 lp = ivec2(gl_GlobalInvocationID.xy);   // target texel (low resolution)
     if (any(greaterThanEqual(lp, gsrLowResSize()))) return;
 
     float d, rough, mask; vec3 vp, nV, N;
@@ -80,9 +80,9 @@ void main() {
     if (mask <= 0.001) { imageStore(uReflOut, lp, vec4(0.0, 0.0, 0.0, -1.0)); return; }
     ivec2 rel = px - lp * uResScale;
     imageStore(uReprOut, lp, uvec4(uint(rel.x + rel.y * uResScale)));
-    vec3 P  = (uInvView * vec4(vp, 1.0)).xyz;           // relatif caméra, non tourné
+    vec3 P  = (uInvView * vec4(vp, 1.0)).xyz;           // camera-relative, unrotated
 
-    // Direction : miroir parfait, ou microfacette GGX tirée (bruit -> lissé par la passe temporelle)
+    // Direction: perfect mirror, or sampled GGX microfacet (noise -> smoothed by the temporal pass)
     vec3 Vw = normalize(P);
     float alpha = max(rough * rough, 1e-4);
     vec3 R;
@@ -97,7 +97,7 @@ void main() {
         if (dot(R, N) <= 0.0) R = reflect(Vw, N);
     }
 
-    // ---- 1) SSR (précis, mais limité à ce que la caméra voit) ----
+    // ---- 1) SSR (accurate, but limited to what the camera sees) ----
     vec3 rV = normalize(mat3(uView) * R);
     vec2 hitUV; float ssrDist;
     float conf = uDebugView >= 2 && uDebugView <= 4 ? 0.0 : ssrTrace(vp + nV * 0.02, rV, px, hitUV, ssrDist);
@@ -106,18 +106,18 @@ void main() {
     vec3  col  = ssrCol;
     float dist = ssrDist;
 
-    // ---- 2) Repli GSR : la scène à 360° autour du joueur, hors écran ou occultée ----
+    // ---- 2) GSR fallback: the 360° scene around the player, off-screen or occluded ----
     if (conf < 0.999 && uDebugView == 1) {
         col  = mix(gsrSkyRadiance(R), ssrCol, conf);
         dist = mix(uMaxTrace, ssrDist, conf);
     } else if (conf < 0.999) {
-        // Rugosité -> demi-angle du cône -> niveau de clipmap (reflet flou = splats plus gros = moins de pas)
+        // Roughness -> cone half-angle -> clipmap level (blurry reflection = bigger splats = fewer steps)
         float coneTan = mix(0.002, 0.35, alpha);
         GsrHit gh = gsrTrace(P + N * 0.05, R, 0.02, uMaxTrace, coneTan, 0.0);
         vec3 g = gh.radiance + gh.transmittance * gsrSkyRadiance(R);
         col  = mix(g, ssrCol, conf);
         dist = mix(gh.hitDist, ssrDist, conf);
-        // Vue « hit » : r = transmittance, g = distance / 16, b = (niveau + 1) / 4 (0 = rien touché)
+        // "Hit" view: r = transmittance, g = distance / 16, b = (level + 1) / 4 (0 = nothing hit)
         if (uDebugView == 4) col = vec3(gh.transmittance, gh.hitDist / 16.0, float(gh.level + 1) / 4.0);
     }
     imageStore(uReflOut, lp, vec4(col, dist));

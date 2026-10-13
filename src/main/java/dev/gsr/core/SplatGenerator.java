@@ -4,21 +4,21 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 /**
- * Conversion voxels -> Gaussiennes 3D (surfels gaussiens anisotropes).
+ * Voxels -> 3D Gaussians conversion (anisotropic Gaussian surfels).
  *
- * Pour chaque face EXPOSÉE d'un voxel non vide (voisin = air, ou opaque contre translucide),
- * on émet un splat :
- *  - centre au milieu de la face,
- *  - covariance oblate : σt dans le plan de la face, σn (petit) le long de la normale,
- *    Σ = σt²(I − nnᵀ) + σn² nnᵀ  -> un "disque" gaussien orienté,
- *  - albédo + opacité, lumière (sky/block) prise dans le voxel voisin exposé, émission.
+ * For each EXPOSED face of a non-empty voxel (neighbor = air, or opaque against translucent),
+ * one splat is emitted:
+ *  - center at the middle of the face,
+ *  - oblate covariance: σt in the plane of the face, σn (small) along the normal,
+ *    Σ = σt²(I − nnᵀ) + σn² nnᵀ  -> an oriented Gaussian "disc",
+ *  - albedo + opacity, light (sky/block) taken from the exposed neighboring voxel, emission.
  *
- * Ne garder que les faces exposées revient à n'extraire que la "peau" visible du monde :
- * l'intérieur des montagnes ne coûte rien. Si une page dépasse son budget, on garde en priorité
- * les faces exposées au ciel (surfaces extérieures, les plus utiles en reflet).
+ * Keeping only exposed faces amounts to extracting only the visible "skin" of the world:
+ * the inside of mountains costs nothing. If a page exceeds its budget, priority is given
+ * to the faces exposed to the sky (outdoor surfaces, the most useful for reflections).
  *
- * Le résultat est trié par cellule (2³ voxels) : le shader parcourt la grille de cellules par DDA
- * et n'évalue que les splats de la cellule traversée.
+ * The result is sorted by cell (2³ voxels): the shader walks the cell grid with a DDA
+ * and only evaluates the splats of the traversed cell.
  */
 public final class SplatGenerator {
     private SplatGenerator() {}
@@ -67,7 +67,7 @@ public final class SplatGenerator {
                     }
                 }
 
-        // ---- Budget : sélection par priorité (seau 0..31, ciel ouvert d'abord) ----
+        // ---- Budget: selection by priority (bucket 0..31, open sky first) ----
         int[] order;
         int kept;
         if (n > cfg.maxSplatsPerPage) {
@@ -84,7 +84,7 @@ public final class SplatGenerator {
             for (int i = 0; i < n; i++) order[i] = i;
         }
 
-        // ---- Tri par cellule (counting sort) + table de cellules ----
+        // ---- Sort by cell (counting sort) + cell table ----
         int[] counts = new int[GsrLayout.CELLS_PER_PAGE];
         for (int j = 0; j < kept; j++) counts[cell[order[j]]]++;
         int[] cells = new int[GsrLayout.CELLS_PER_PAGE];
@@ -110,9 +110,9 @@ public final class SplatGenerator {
             buf.putFloat(base + 8, pz[i]);
             buf.putFloat(base + 12, sigmaT);
             buf.putInt(base + 16, rgba);          // data.x : 0xAARRGGBB
-            buf.putInt(base + 20, dat[i]);        // data.y : normale | lumière | émission | niveau
+            buf.putInt(base + 20, dat[i]);        // data.y : normal | light | emission | level
             buf.putFloat(base + 24, sigmaN);      // data.z : floatBitsToUint(σn)
-            buf.putInt(base + 28, 0);             // data.w : réservé (ID matériau, rugosité...)
+            buf.putInt(base + 28, 0);             // data.w : reserved (material ID, roughness...)
         }
         return new PageData(key, version, kept, buf, cells, GsrLayout.brickMask(cells));
     }

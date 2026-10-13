@@ -3,27 +3,27 @@ package dev.gsr.render;
 import static org.lwjgl.opengl.GL43C.*;
 
 /**
- * Cibles écran du mode autonome. Pleine résolution : profondeur opaque. Basse résolution (écran / scale) :
- * reflet brut, indice du pixel représentatif, historique (ping-pong), distance caméra du pixel
- * représentatif (ping-pong).
+ * Screen targets of standalone mode. Full resolution: opaque depth. Low resolution (screen / scale):
+ * raw reflection, representative pixel index, history (ping-pong), camera distance of the
+ * representative pixel (ping-pong).
  */
 public final class GsrScreenTargets {
-    /** Profondeur opaque R32F. */
+    /** Opaque depth R32F. */
     private static final int FULL_BYTES_PER_PIXEL = 4;
-    /** reflet RGBA16F 8 + représentant R8UI 1 + 2 × historique RGBA16F 8 + 2 × distance R32F 4. */
+    /** reflection RGBA16F 8 + representative R8UI 1 + 2 × history RGBA16F 8 + 2 × distance R32F 4. */
     private static final int LOW_BYTES_PER_PIXEL = 8 + 1 + 2 * 8 + 2 * 4;
 
     public int width = -1, height = -1;
-    /** Facteur de réduction des passes reflet + temporel (1 ou 2) et taille correspondante. */
+    /** Downscale factor of the reflection + temporal passes (1 or 2) and corresponding size. */
     public int scale = 1, lowWidth, lowHeight;
     public int reflection;
-    /** Indice (i + j·scale) du pixel plein écran choisi par la passe reflet, relu par la passe temporelle. */
+    /** Index (i + j*scale) of the full-screen pixel chosen by the reflection pass, re-read by the temporal pass. */
     public int representative;
-    /** Profondeur opaque copiée avant la couche translucide (masque eau/translucide). */
+    /** Opaque depth copied before the translucent layer (water/translucent mask). */
     public int opaqueDepth;
     public final int[] history = new int[2];
     public final int[] distance = new int[2];
-    public int current;           // index écrit cette frame
+    public int current;           // index written this frame
     public boolean historyValid;
 
     public void ensureSize(int w, int h, int s) {
@@ -35,7 +35,7 @@ public final class GsrScreenTargets {
         reflection = tex(GL_RGBA16F, GL_NEAREST, lowWidth, lowHeight);
         representative = tex(GL_R8UI, GL_NEAREST, lowWidth, lowHeight);
         for (int i = 0; i < 2; i++) {
-            history[i] = tex(GL_RGBA16F, GL_LINEAR, lowWidth, lowHeight);   // bilinéaire pour la reprojection
+            history[i] = tex(GL_RGBA16F, GL_LINEAR, lowWidth, lowHeight);   // bilinear for reprojection
             distance[i] = tex(GL_R32F, GL_LINEAR, lowWidth, lowHeight);
         }
         historyValid = false;

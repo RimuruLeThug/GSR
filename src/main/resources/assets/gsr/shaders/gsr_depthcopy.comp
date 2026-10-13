@@ -1,7 +1,7 @@
 // =============================================================================================
-//  GSR — copie de la profondeur OPAQUE (avant la couche translucide), mode autonome.
-//  Comparée plus tard à la profondeur finale : là où la finale est plus proche, une surface
-//  translucide (eau, glace, verre) a été dessinée -> masque de réflexion sans G-buffer matériau.
+//  GSR — copy of the OPAQUE depth (before the translucent layer), standalone mode.
+//  Later compared to the final depth: where the final one is closer, a translucent
+//  surface (water, ice, glass) was drawn -> reflection mask without a material G-buffer.
 // =============================================================================================
 layout(local_size_x = 8, local_size_y = 8) in;
 

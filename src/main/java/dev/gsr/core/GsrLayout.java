@@ -1,14 +1,14 @@
 package dev.gsr.core;
 
 /**
- * Constantes de format partagées entre Java et GLSL.
- * Toute modification ici DOIT être répercutée dans assets/gsr/shaders/gsr_common.glsl.
+ * Format constants shared between Java and GLSL.
+ * Any change here MUST be mirrored in assets/gsr/shaders/gsr_common.glsl.
  *
- * Unités :
- *  - "bloc"   : 1 bloc Minecraft.
- *  - "voxel"  : voxel du niveau L de la clipmap = (1 << L) blocs de côté.
- *  - "page"   : 16 x 16 x 16 voxels du niveau L  (au niveau 0 : exactement une section Minecraft).
- *  - "cellule": 2 x 2 x 2 voxels -> 8 x 8 x 8 = 512 cellules par page (grille d'accélération du lancer de rayon).
+ * Units:
+ *  - "block"  : 1 Minecraft block.
+ *  - "voxel"  : voxel of clipmap level L = (1 << L) blocks per side.
+ *  - "page"   : 16 x 16 x 16 voxels of level L  (at level 0: exactly one Minecraft section).
+ *  - "cell"   : 2 x 2 x 2 voxels -> 8 x 8 x 8 = 512 cells per page (ray tracing acceleration grid).
  */
 public final class GsrLayout {
     private GsrLayout() {}
@@ -23,10 +23,10 @@ public final class GsrLayout {
     public static final int SPLAT_BYTES = 32;
     /**
      * std430 : struct GsrPageMeta { ivec4 page; uvec4 mask; }
-     *   page = (pageX, pageY, pageZ, splatCount), mask.xy = masque de briques 64 bits, mask.zw réservés.
+     *   page = (pageX, pageY, pageZ, splatCount), mask.xy = 64-bit brick mask, mask.zw reserved.
      */
     public static final int PAGE_META_BYTES = 32;
-    /** Brique = 2 x 2 x 2 cellules = 4³ voxels -> 4 x 4 x 4 = 64 briques par page (1 bit chacune). */
+    /** Brick = 2 x 2 x 2 cells = 4³ voxels -> 4 x 4 x 4 = 64 bricks per page (1 bit each). */
     public static final int BRICKS_PER_AXIS = CELLS_PER_AXIS / 2; // 4
     /** std430 : uint (offset | count << 16) */
     public static final int CELL_BYTES = 4;
@@ -35,18 +35,18 @@ public final class GsrLayout {
     public static final int KIND_OPAQUE = 1;
     public static final int KIND_TRANSLUCENT = 2;
 
-    /** Valeur de méta signifiant "slot vide / invalide". */
+    /** Meta value meaning "empty / invalid slot". */
     public static final int INVALID_PAGE_COORD = Integer.MIN_VALUE;
 
-    // Directions des 6 faces : -X +X -Y +Y -Z +Z
+    // Directions of the 6 faces: -X +X -Y +Y -Z +Z
     public static final int[][] DIRS = {
             {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}
     };
 
-    /** Groupes de faces pour l'albédo : un bloc d'herbe est vert dessus, terre sur les côtés et dessous. */
+    /** Face groups for albedo: a grass block is green on top, dirt on the sides and bottom. */
     public static final int FACE_SIDE = 0, FACE_UP = 1, FACE_DOWN = 2, FACE_GROUPS = 3;
 
-    /** Index de direction (ordre de {@link #DIRS}) -> groupe de faces. */
+    /** Direction index (order of {@link #DIRS}) -> face group. */
     public static int faceGroup(int dir) { return dir == 3 ? FACE_UP : dir == 2 ? FACE_DOWN : FACE_SIDE; }
 
     public static int cellIndex(int cx, int cy, int cz) {
@@ -57,7 +57,7 @@ public final class GsrLayout {
         return bx + BRICKS_PER_AXIS * (by + BRICKS_PER_AXIS * bz);
     }
 
-    /** Masque des briques contenant au moins un splat, d'après la table de cellules (offset | count << 16). */
+    /** Mask of the bricks containing at least one splat, from the cell table (offset | count << 16). */
     public static long brickMask(int[] cells) {
         long mask = 0;
         for (int c = 0; c < CELLS_PER_PAGE; c++) {
@@ -68,24 +68,24 @@ public final class GsrLayout {
         return mask;
     }
 
-    // ---- Packing de data.y (doit correspondre à gsr_common.glsl) ----
-    //  bits  0..15 : normale octaédrique 8+8
-    //  bits 16..23 : lumière (sky << 4 | block)
-    //  bits 24..27 : émission 0..15
-    //  bits 28..29 : niveau de clipmap
-    //  bit  30     : sans ombrage par face (plantes en croix)
+    // ---- Packing of data.y (must match gsr_common.glsl) ----
+    //  bits  0..15 : octahedral normal 8+8
+    //  bits 16..23 : light (sky << 4 | block)
+    //  bits 24..27 : emission 0..15
+    //  bits 28..29 : clipmap level
+    //  bit  30     : no per-face shading (cross plants)
     public static int packSplatData(int oct16, int light8, int emission4, int level) {
         return packSplatData(oct16, light8, emission4, level, false);
     }
 
-    /** Bit 30 : ombrage par face désactivé (= GSR_DATA_UNSHADED). */
+    /** Bit 30: per-face shading disabled (= GSR_DATA_UNSHADED). */
     public static int packSplatData(int oct16, int light8, int emission4, int level, boolean unshaded) {
         return (oct16 & 0xFFFF) | ((light8 & 0xFF) << 16) | ((emission4 & 0xF) << 24) | ((level & 0x3) << 28) | (unshaded ? 1 << 30 : 0);
     }
 
     private static float signNotZero(float v) { return v >= 0f ? 1f : -1f; }
 
-    /** Encodage octaédrique 8+8 bits. */
+    /** Octahedral encoding, 8+8 bits. */
     public static int octEncode(float x, float y, float z) {
         float inv = 1f / (Math.abs(x) + Math.abs(y) + Math.abs(z));
         float u = x * inv, v = y * inv;
@@ -99,7 +99,7 @@ public final class GsrLayout {
         return (iu & 0xFF) | ((iv & 0xFF) << 8);
     }
 
-    /** Décodage (miroir exact de gsrOctDecode en GLSL). Retourne une normale normalisée. */
+    /** Decoding (exact mirror of gsrOctDecode in GLSL). Returns a normalized normal. */
     public static float[] octDecode(int p) {
         float ex = (p & 0xFF) / 255f * 2f - 1f;
         float ey = ((p >>> 8) & 0xFF) / 255f * 2f - 1f;
@@ -113,7 +113,7 @@ public final class GsrLayout {
         return new float[]{nx / len, ny / len, nz / len};
     }
 
-    // ---- Clé de section (même idée que ChunkSectionPos.asLong) ----
+    // ---- Section key (same idea as ChunkSectionPos.asLong) ----
     public static long sectionKey(int sx, int sy, int sz) {
         return ((long) (sx & 0x3FFFFF) << 42) | ((long) (sz & 0x3FFFFF) << 20) | (sy & 0xFFFFFL);
     }
