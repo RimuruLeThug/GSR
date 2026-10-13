@@ -52,3 +52,10 @@ vec3 reflection(vec3 playerPos, vec3 N, float rough, float lmSky,
   disponibles dans `GsrSplat`.
 * Si GSR n'est pas installé, les SSBO ne sont pas liés : prévoir une option du pack (`#ifdef GSR`) qui
   désactive l'appel.
+
+## Pack de test
+
+`examples/gsr-testpack` est un pack minimal qui suit exactement ces étapes (reflet de l'eau par
+`gsrTrace()` seul, sans SSR). `./gradlew gsrTestPack` le copie avec `gsr_common.glsl` dans
+`run/shaderpacks/GSR-TestPack` ; `./gradlew runClient -PwithIris` le fait automatiquement. Vérifié avec
+Iris 1.8.8 sur pilote AMD.

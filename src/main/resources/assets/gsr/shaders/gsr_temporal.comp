@@ -13,6 +13,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 #include "gsr_screen.glsl"
 
 layout(binding = 0) uniform sampler2D uDepth;
+layout(binding = 1) uniform usampler2D uRepr;     // indice du pixel représentatif (passe reflet)
 layout(binding = 2) uniform sampler2D uCurrent;   // rgb + distance d'impact
 layout(binding = 3) uniform sampler2D uHistory;   // rgb + longueur d'historique
 layout(binding = 4) uniform sampler2D uPrevDist;  // distance caméra de la frame précédente
@@ -39,13 +40,17 @@ void main() {
     if (any(greaterThanEqual(lp, lowSize))) return;
 
     vec4 cur = texelFetch(uCurrent, lp, 0);
-    float d, rough, mask; vec3 vp, nV, N;
-    ivec2 px = gsrRepresentative(uDepth, lp, d, vp, nV, N, rough, mask);
-    if (mask <= 0.001 || cur.a < 0.0) {
+    if (cur.a < 0.0) {   // la passe reflet n'a trouvé aucun pixel réfléchissant dans ce bloc
         imageStore(uHistoryOut, lp, vec4(0.0));
         imageStore(uDistOut, lp, vec4(1e9));
         return;
     }
+    // Pixel représentatif choisi par la passe reflet (au lieu de refaire la recherche : jusqu'à 4
+    // reconstructions de normale par texel). Mode autonome : rugosité uniforme.
+    uint ri = texelFetch(uRepr, lp, 0).r;
+    ivec2 px = lp * uResScale + ivec2(int(ri) % uResScale, int(ri) / uResScale);
+    vec3 vp = gsrViewPos((vec2(px) + 0.5) / uScreenSize, texelFetch(uDepth, px, 0).r);
+    float rough = uRoughness;
     vec3 P = (uInvView * vec4(vp, 1.0)).xyz;
     // Le reflet vient du pixel représentatif, mais l'historique est stocké au centre du texel :
     // on lit l'historique décalé d'autant, sinon chaque frame le rééchantillonnerait de ¼ de texel

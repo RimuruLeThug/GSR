@@ -4,18 +4,21 @@ import static org.lwjgl.opengl.GL43C.*;
 
 /**
  * Cibles écran du mode autonome. Pleine résolution : profondeur opaque. Basse résolution (écran / scale) :
- * reflet brut, historique (ping-pong), distance caméra du pixel représentatif (ping-pong).
+ * reflet brut, indice du pixel représentatif, historique (ping-pong), distance caméra du pixel
+ * représentatif (ping-pong).
  */
 public final class GsrScreenTargets {
     /** Profondeur opaque R32F. */
     private static final int FULL_BYTES_PER_PIXEL = 4;
-    /** reflet RGBA16F 8 + 2 × historique RGBA16F 8 + 2 × distance R32F 4. */
-    private static final int LOW_BYTES_PER_PIXEL = 8 + 2 * 8 + 2 * 4;
+    /** reflet RGBA16F 8 + représentant R8UI 1 + 2 × historique RGBA16F 8 + 2 × distance R32F 4. */
+    private static final int LOW_BYTES_PER_PIXEL = 8 + 1 + 2 * 8 + 2 * 4;
 
     public int width = -1, height = -1;
     /** Facteur de réduction des passes reflet + temporel (1 ou 2) et taille correspondante. */
     public int scale = 1, lowWidth, lowHeight;
     public int reflection;
+    /** Indice (i + j·scale) du pixel plein écran choisi par la passe reflet, relu par la passe temporelle. */
+    public int representative;
     /** Profondeur opaque copiée avant la couche translucide (masque eau/translucide). */
     public int opaqueDepth;
     public final int[] history = new int[2];
@@ -30,6 +33,7 @@ public final class GsrScreenTargets {
         lowWidth = (w + s - 1) / s; lowHeight = (h + s - 1) / s;
         opaqueDepth = tex(GL_R32F, GL_NEAREST, w, h);
         reflection = tex(GL_RGBA16F, GL_NEAREST, lowWidth, lowHeight);
+        representative = tex(GL_R8UI, GL_NEAREST, lowWidth, lowHeight);
         for (int i = 0; i < 2; i++) {
             history[i] = tex(GL_RGBA16F, GL_LINEAR, lowWidth, lowHeight);   // bilinéaire pour la reprojection
             distance[i] = tex(GL_R32F, GL_LINEAR, lowWidth, lowHeight);
@@ -57,7 +61,7 @@ public final class GsrScreenTargets {
 
     public void delete() {
         if (width < 0) return;
-        glDeleteTextures(new int[]{reflection, opaqueDepth, history[0], history[1], distance[0], distance[1]});
+        glDeleteTextures(new int[]{reflection, representative, opaqueDepth, history[0], history[1], distance[0], distance[1]});
         width = height = -1;
     }
 }

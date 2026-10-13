@@ -81,7 +81,7 @@ vec2 gsrScreenToLowUV(vec2 uv) { return uv * uScreenSize / vec2(gsrLowResSize() 
  * Pixel plein écran représentant le texel basse résolution lp : le premier pixel du bloc
  * uResScale² (ordre fixe -> stable d'une frame à l'autre) qui porte un reflet. Un bloc à cheval
  * sur un bord d'eau a ainsi toujours un échantillon d'eau. mask = 0 si aucun pixel ne reflète.
- * Déterministe : les passes reflet et temporelle choisissent le même pixel.
+ * Ordre fixe : stable d'une frame à l'autre. La passe reflet écrit son choix (uReprOut), relu par le temporel.
  */
 ivec2 gsrRepresentative(sampler2D depthTex, ivec2 lp, out float d, out vec3 vp, out vec3 nV, out vec3 N,
                         out float rough, out float mask) {

@@ -10,6 +10,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0) uniform sampler2D uDepth;
 layout(binding = 1) uniform sampler2D uSceneColor;
 layout(rgba16f, binding = 0) writeonly uniform image2D uReflOut;
+layout(r8ui,    binding = 1) writeonly uniform uimage2D uReprOut;   // pixel représentatif, relu par le temporel
 
 uniform float uMaxTrace;
 uniform int   uDebugView;   // 0 normal, 1 SSR seul (ciel en repli), 2 GSR seul, 3 GSR brut, 4 impact GSR, 5 reflet brut
@@ -77,6 +78,8 @@ void main() {
     float d, rough, mask; vec3 vp, nV, N;
     ivec2 px = gsrRepresentative(uDepth, lp, d, vp, nV, N, rough, mask);
     if (mask <= 0.001) { imageStore(uReflOut, lp, vec4(0.0, 0.0, 0.0, -1.0)); return; }
+    ivec2 rel = px - lp * uResScale;
+    imageStore(uReprOut, lp, uvec4(uint(rel.x + rel.y * uResScale)));
     vec3 P  = (uInvView * vec4(vp, 1.0)).xyz;           // relatif caméra, non tourné
 
     // Direction : miroir parfait, ou microfacette GGX tirée (bruit -> lissé par la passe temporelle)

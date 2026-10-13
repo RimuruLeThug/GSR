@@ -207,6 +207,7 @@ public final class GsrRenderer {
             bindTex(0, depthTex);
             bindTex(1, fb.getColorAttachment());
             glBindImageTexture(0, targets.reflection, 0, false, 0, GL_WRITE_ONLY, GL_RGBA16F);
+            glBindImageTexture(1, targets.representative, 0, false, 0, GL_WRITE_ONLY, GL_R8UI);
             timer.begin(T_REFLECT);
             glDispatchCompute(lgx, lgy, 1);
             timer.end(T_REFLECT);
@@ -221,6 +222,7 @@ public final class GsrRenderer {
             glUniform3f(loc(progTemporal, "uCamDelta"), (float) delta.x, (float) delta.y, (float) delta.z);
             glUniform1i(loc(progTemporal, "uHistoryValid"), targets.historyValid && prevCam != null ? 1 : 0);
             bindTex(0, depthTex);
+            bindTex(1, targets.representative);
             bindTex(2, targets.reflection);
             bindTex(3, targets.history[prev]);
             bindTex(4, targets.distance[prev]);

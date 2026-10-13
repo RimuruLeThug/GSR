@@ -182,6 +182,7 @@ public final class GsrClient implements ClientModInitializer {
             int i = t / 60;
             saveShot(client, AUTOSHOT + "_" + AUTOSHOT_VIEWS[i]);
             if (i == 0) LOG.info("GSR autoshot : caméra tp @s {} {} {} {} {}", client.player.getX(), client.player.getY(), client.player.getZ(), client.player.getYaw(), client.player.getPitch());
+            if (i == 0) for (String line : statsLines()) LOG.info("GSR autoshot stats : {}", line);
             CONFIG.debugView = (i + 1) % AUTOSHOT_VIEWS.length;   // vue suivante ; normal après la dernière
             return;
         }

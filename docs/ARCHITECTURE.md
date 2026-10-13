@@ -238,8 +238,8 @@ silhouettes (constaté par l'utilisateur). Mesures `/gsr stats` au même endroit
 | cibles écran (VRAM) | 120,3 Mio | 40,1 Mio |
 
 Le temporel ne gagne presque rien : la recherche du pixel représentatif (jusqu'à 4 reconstructions de
-normale par texel) compense la réduction du nombre de pixels. Si besoin, on peut écrire l'indice du
-représentant dans la passe reflet et le relire, au lieu de le recalculer.
+normale par texel) compense la réduction du nombre de pixels. Corrigé plus bas : la passe reflet écrit
+l'indice du représentant, le temporel le relit.
 
 **Vérifié le 2026-10-13 (2e session, captures automatiques `-PgsrCmds`, fenêtre 854×480)** :
 scintillement mesuré par `tools/FlickerDiff` (part des pixels d'eau dont l'amplitude dépasse 16/255,
@@ -259,9 +259,22 @@ Tests de compatibilité : `./gradlew runClient -PwithSodium` ou `-PwithIris` (So
 bibliothèques jcpp / glsl-transformer / antlr, non chargées depuis le jar d'Iris en dev). Sodium 0.6.13
 exige Loom ≥ 1.8.9 : le projet est passé en Loom 1.8. Les erreurs `[MIXIN] Cannot resolve class
 org/lwjgl/glfw/GLFW` au démarrage viennent de la pré-vérification de Sodium en dev, sans conséquence.
-Le mode service n'est vérifié qu'en « ne plante pas » : aucun pack public n'appelle encore `gsrTrace()`.
+Avec Complementary, le mode service n'est vérifié qu'en « ne plante pas » (le pack n'appelle pas `gsrTrace()`) ; voir le pack de test plus bas.
 
-**Non vérifié** : pilotes NVIDIA/Intel, mode service avec un pack qui appelle réellement `gsrTrace()`.
+**Non vérifié** : pilotes NVIDIA/Intel ; un vrai shaderpack public intégrant GSR (seul le pack de test minimal est vérifié).
+
+**Passe temporelle allégée (2026-10-13)** : la passe reflet écrit l'indice du pixel représentatif qu'elle a
+choisi (cible `R8UI` basse résolution, 1 o/texel) ; la passe temporelle le relit au lieu de refaire la
+recherche (jusqu'à 4 reconstructions de normale par texel). Même position, même vue (2560×1369, RX 7800 XT) :
+temporel **0,13 → 0,07 ms**, total 0,78 → 0,72 ms. Images avant/après identiques hors animation de la
+texture d'eau (vues `raw` et `hit` : < 0,03 % de pixels différents).
+
+**Mode service vérifié avec un pack qui appelle `gsrTrace()` (2026-10-13)** : pack de test minimal
+`examples/gsr-testpack` (eau marquée dans `colortex2` par `gbuffers_water`, `composite` en
+`#version 430 compatibility` qui inclut `/lib/gsr_common.glsl` et trace le reflet **uniquement** par
+`gsrTrace()`, sans SSR). `./gradlew gsrTestPack` l'assemble dans `run/shaderpacks/GSR-TestPack` (fait
+automatiquement avec `-PwithIris`). Iris 1.8.8 + Sodium 0.6.13, AMD : le pack compile, les SSBO liés aux
+points 10–13 sont lus, l'eau reflète la colline, les arbres et le cerisier, aucune erreur dans le log.
 
 **Problèmes résolus (vérifiés par l'utilisateur le 2026-10-13, commit `c30a21b`)** : plus de
 scintillement de l'eau en marchant et en tournant la caméra, plus de nuage vert au ras de l'eau. Les

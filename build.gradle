@@ -53,3 +53,12 @@ processResources {
     inputs.property 'version', project.version
     filesMatching('fabric.mod.json') { expand 'version': project.version }
 }
+
+// Pack de test du mode service (examples/gsr-testpack + gsr_common.glsl) -> run/shaderpacks/GSR-TestPack.
+// À sélectionner dans Iris : ./gradlew runClient -PwithIris (shaderPack=GSR-TestPack dans run/config/iris.properties).
+tasks.register('gsrTestPack', Sync) {
+    from('examples/gsr-testpack')
+    from('src/main/resources/assets/gsr/shaders/gsr_common.glsl') { into 'shaders/lib' }
+    into 'run/shaderpacks/GSR-TestPack'
+}
+if (project.hasProperty('withIris')) tasks.named('runClient') { dependsOn 'gsrTestPack' }
