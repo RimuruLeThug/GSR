@@ -7,15 +7,21 @@ import dev.gsr.mc.BlockMaterialTable;
 import dev.gsr.mc.McSnapshotSource;
 import dev.gsr.render.GsrRenderer;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.world.ClientWorld;
+import net.minecraft.text.Text;
 import net.minecraft.util.Util;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Point d'entrée Fabric : câble les événements du monde vers le GaussianChunkManager et les
@@ -56,8 +62,31 @@ public final class GsrClient implements ClientModInitializer {
         });
         WorldRenderEvents.END.register(RENDERER::endFrame);
 
+        ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> dispatcher.register(
+                ClientCommandManager.literal("gsr").then(ClientCommandManager.literal("stats").executes(c -> {
+                    for (String line : statsLines()) c.getSource().sendFeedback(Text.literal(line));
+                    return 1;
+                }))));
+
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(() -> ensureWorld(null)));
         LOG.info("GSR (Gaussian Space Reflections) initialisé");
+    }
+
+    /** Contenu de /gsr stats (thread client). */
+    private static List<String> statsLines() {
+        List<String> out = new ArrayList<>();
+        boolean iris = IrisCompat.isShaderPackInUse();
+        out.add("§6GSR§r — mode " + (iris ? "service (shaderpack Iris)" : CONFIG.standaloneEnabled ? "autonome" : "inactif"));
+        if (manager == null) { out.add("Aucun monde chargé"); return out; }
+        GaussianChunkManager.Stats s = manager.stats();
+        for (int L = 0; L < s.pages().length; L++) {
+            out.add(String.format("L%d (voxel %d) : %d/%d pages, %d non vides, %,d splats",
+                    L, 1 << L, s.pages()[L], s.slotsPerLevel(), s.nonEmptyPages()[L], s.splats()[L]));
+        }
+        out.add(String.format("Files : captures %d, grossières %d, workers %d, prêtes %d ; résumés %,d ; uploads %,d",
+                s.captureQueue(), s.coarsePending(), s.inFlight(), s.readyQueue(), s.summaries(), s.totalUploads()));
+        RENDERER.appendStats(out, CONFIG, standaloneActive());
+        return out;
     }
 
     private static boolean standaloneActive() {

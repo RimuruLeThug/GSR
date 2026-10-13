@@ -43,6 +43,13 @@ public final class GsrRenderer {
     private int progDepthCopy, progReflect, progTemporal, progComposite;
     /** Vrai si la profondeur opaque a été copiée pendant cette frame (sinon le masque serait faux). */
     private boolean opaqueDepthCaptured;
+
+    // Chronométrage (/gsr stats) : sections GPU disjointes + temps CPU des téléversements.
+    static final int T_DEPTH = 0, T_REFLECT = 1, T_TEMPORAL = 2, T_COMPOSITE = 3;
+    private static final String[] T_NAMES = {"copie prof.", "reflet", "temporel", "composition"};
+    private GsrGpuTimer timer;
+    private double uploadCpuMs;
+    private int lastUploads;
     private final Map<Integer, Map<String, Integer>> uniformCache = new HashMap<>();
 
     private final GsrFrameData frame = new GsrFrameData();
@@ -68,6 +75,7 @@ public final class GsrRenderer {
             progReflect = GsrShaderLoader.compileCompute("gsr_reflect.comp", cfg.ssboBindingBase);
             progTemporal = GsrShaderLoader.compileCompute("gsr_temporal.comp", cfg.ssboBindingBase);
             progComposite = GsrShaderLoader.compileCompute("gsr_composite.comp", cfg.ssboBindingBase);
+            timer = new GsrGpuTimer(T_NAMES.length);
             initialized = true;
         } catch (RuntimeException e) {
             failed = true;
@@ -102,7 +110,9 @@ public final class GsrRenderer {
 
     public void beginFrame(WorldRenderContext ctx, GaussianChunkManager mgr, GsrConfig cfg) {
         if (!ensureInit(cfg)) return;
-        mgr.drainUploads(gpu, cfg.uploadsPerFrame);
+        long t0 = System.nanoTime();
+        lastUploads = mgr.drainUploads(gpu, cfg.uploadsPerFrame);
+        uploadCpuMs = uploadCpuMs * 0.9 + (System.nanoTime() - t0) / 1e6 * 0.1;
 
         Vec3d cam = ctx.camera().getPos();
         frame.setCamera(cam.x, cam.y, cam.z);
@@ -157,7 +167,9 @@ public final class GsrRenderer {
             glUniform2f(loc(progDepthCopy, "uScreenSize"), w, h);
             bindTex(0, fb.getDepthAttachment());
             glBindImageTexture(0, targets.opaqueDepth, 0, false, 0, GL_WRITE_ONLY, GL_R32F);
+            timer.begin(T_DEPTH);
             glDispatchCompute((w + 7) / 8, (h + 7) / 8, 1);
+            timer.end(T_DEPTH);
             glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
             opaqueDepthCaptured = true;
         } finally {
@@ -191,7 +203,9 @@ public final class GsrRenderer {
             bindTex(0, depthTex);
             bindTex(1, fb.getColorAttachment());
             glBindImageTexture(0, targets.reflection, 0, false, 0, GL_WRITE_ONLY, GL_RGBA16F);
+            timer.begin(T_REFLECT);
             glDispatchCompute(gx, gy, 1);
+            timer.end(T_REFLECT);
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 
             // 2) accumulation temporelle
@@ -208,7 +222,9 @@ public final class GsrRenderer {
             bindTex(4, targets.distance[prev]);
             glBindImageTexture(0, targets.history[cur], 0, false, 0, GL_WRITE_ONLY, GL_RGBA16F);
             glBindImageTexture(1, targets.distance[cur], 0, false, 0, GL_WRITE_ONLY, GL_R32F);
+            timer.begin(T_TEMPORAL);
             glDispatchCompute(gx, gy, 1);
+            timer.end(T_TEMPORAL);
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 
             // 3) composition dans le framebuffer principal
@@ -217,7 +233,9 @@ public final class GsrRenderer {
             bindTex(0, depthTex);
             bindTex(2, targets.history[cur]);
             glBindImageTexture(0, fb.getColorAttachment(), 0, false, 0, GL_READ_WRITE, GL_RGBA8);
+            timer.begin(T_COMPOSITE);
             glDispatchCompute(gx, gy, 1);
+            timer.end(T_COMPOSITE);
             glMemoryBarrier(GL_FRAMEBUFFER_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
             targets.swap();
@@ -232,6 +250,29 @@ public final class GsrRenderer {
         prevViewProj.set(ctx.projectionMatrix()).mul(ctx.positionMatrix());
         prevCam = ctx.camera().getPos();
         frameIndex++;
+        if (initialized) timer.endFrame();
+    }
+
+    /** Lignes « rendu » de /gsr stats (thread client). */
+    public void appendStats(java.util.List<String> out, GsrConfig cfg, boolean standalone) {
+        if (failed) { out.add("Rendu : désactivé (voir le log)"); return; }
+        if (!initialized) { out.add("Rendu : pas encore initialisé"); return; }
+        StringBuilder gpuLine = new StringBuilder("GPU (moy.) :");
+        double total = 0;
+        for (int s = 0; s < T_NAMES.length; s++) {
+            double ms = timer.avgMs(s);
+            total += ms;
+            gpuLine.append(String.format(" %s %.2f ms,", T_NAMES[s], ms));
+        }
+        gpuLine.append(String.format(" total %.2f ms", total));
+        out.add(standalone ? gpuLine.toString() : "GPU : mode service (shaderpack) ou autonome coupé, passes non dispatchées");
+        out.add(String.format("Téléversement : %d pages à la dernière frame, CPU %.2f ms (moy.)", lastUploads, uploadCpuMs));
+        long ssbo = GsrFrameData.BYTES + (long) cfg.totalSlots() * (dev.gsr.core.GsrLayout.PAGE_META_BYTES
+                + dev.gsr.core.GsrLayout.CELLS_PER_PAGE * dev.gsr.core.GsrLayout.CELL_BYTES
+                + (long) cfg.maxSplatsPerPage * dev.gsr.core.GsrLayout.SPLAT_BYTES);
+        long screen = targets.width < 0 ? 0 : (long) targets.width * targets.height * GsrScreenTargets.BYTES_PER_PIXEL;
+        out.add(String.format("VRAM : SSBO %.1f Mio, cibles écran %.1f Mio (%dx%d)",
+                ssbo / 1048576.0, screen / 1048576.0, Math.max(0, targets.width), Math.max(0, targets.height)));
     }
 
     /** Changement de monde : l'historique temporel n'a plus de sens. */
@@ -266,6 +307,7 @@ public final class GsrRenderer {
     public void close() {
         if (!initialized) return;
         gpu.close();
+        timer.close();
         targets.delete();
         glDeleteProgram(progDepthCopy); glDeleteProgram(progReflect); glDeleteProgram(progTemporal); glDeleteProgram(progComposite);
         initialized = false;

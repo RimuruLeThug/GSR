@@ -39,6 +39,11 @@ public final class CpuReferenceTracer implements GpuSink {
         meta[slot * 4] = GsrLayout.INVALID_PAGE_COORD; meta[slot * 4 + 3] = 0;
     }
 
+    /** Splats du slot selon la méta « GPU », −1 si le slot est invalide (tests). */
+    int metaSplats(int slot) {
+        return meta[slot * 4] == GsrLayout.INVALID_PAGE_COORD ? -1 : meta[slot * 4 + 3];
+    }
+
     public void syncFrom(GaussianClipmap clip) {
         for (int L = 0; L < cfg.levels; L++) windowMin[L] = clip.windowMin(L).clone();
     }

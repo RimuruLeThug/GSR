@@ -61,12 +61,17 @@ public final class GaussianChunkManager implements AutoCloseable {
     private final List<Integer> pendingInvalidations = new ArrayList<>();
     private int psx, psy, psz;
     private long tickCount;
+    /** Splats par slot GPU tel que téléversé (−1 = slot invalide). Miroir CPU de la méta, pour les stats. */
+    private final int[] slotSplats;
+    private long totalUploads;
 
     public GaussianChunkManager(GsrConfig cfg, SectionSnapshotSource source) {
         this.cfg = cfg.validate();
         this.clipmap = new GaussianClipmap(cfg);
         this.source = source;
         for (int i = 0; i < DIST_BUCKETS; i++) captureBuckets[i] = new ArrayDeque<>();
+        this.slotSplats = new int[cfg.totalSlots()];
+        java.util.Arrays.fill(slotSplats, -1);
         ThreadFactory tf = r -> {
             Thread t = new Thread(r, "GSR-Splat-Worker");
             t.setDaemon(true);
@@ -155,18 +160,23 @@ public final class GaussianChunkManager implements AutoCloseable {
             }
         }
 
-        // 3. Captures, de la plus proche à la plus lointaine.
+        // 3. Captures, de la plus proche à la plus lointaine. Une section non chargée (null) ne coûte
+        //    qu'une recherche de chunk : elle ne consomme pas le budget de copies, sinon la couverture
+        //    L3 (±512 blocs, bien au-delà de la distance de rendu) remplit la file de sections vides qui
+        //    ne se vide jamais (vu en jeu : ~100 000 entrées). Plafond séparé pour borner le tick.
         int budget = cfg.capturesPerTick;
-        for (int b = 0; b < DIST_BUCKETS && budget > 0; b++) {
+        int attempts = cfg.capturesPerTick * 64;
+        for (int b = 0; b < DIST_BUCKETS && budget > 0 && attempts > 0; b++) {
             ArrayDeque<Long> q = captureBuckets[b];
-            while (budget > 0 && !q.isEmpty()) {
+            while (budget > 0 && attempts > 0 && !q.isEmpty()) {
                 long key = q.poll();
                 captureQueued.remove(key);
                 int sx = GsrLayout.sectionKeyX(key), sy = GsrLayout.sectionKeyY(key), sz = GsrLayout.sectionKeyZ(key);
                 if (!clipmap.sectionInCoverage(sx, sy, sz)) continue;
+                attempts--;
                 VoxelSource src = source.capture(sx, sy, sz);
-                budget--;
                 if (src == null) continue; // non chargée : sera re-signalée au chargement du chunk
+                budget--;
                 submitSectionJob(key, sx, sy, sz, src);
             }
         }
@@ -240,7 +250,7 @@ public final class GaussianChunkManager implements AutoCloseable {
 
     /** @return nombre de pages envoyées au GPU. */
     public int drainUploads(GpuSink sink, int budget) {
-        for (int slot : pendingInvalidations) sink.invalidate(slot);
+        for (int slot : pendingInvalidations) { sink.invalidate(slot); slotSplats[slot] = -1; }
         pendingInvalidations.clear();
         int n = 0;
         while (n < budget) {
@@ -248,10 +258,39 @@ public final class GaussianChunkManager implements AutoCloseable {
             if (pd == null) break;
             Long v = latestVersion.get(pd.key());
             if (v == null || v != pd.version() || !clipmap.contains(pd.key())) continue; // obsolète
-            sink.upload(clipmap.slotIndex(pd.key()), pd);
+            int slot = clipmap.slotIndex(pd.key());
+            sink.upload(slot, pd);
+            slotSplats[slot] = pd.splatCount();
             n++;
         }
+        totalUploads += n;
         return n;
+    }
+
+    // ------------------------------------------------------------------ Statistiques (thread principal)
+
+    /**
+     * Instantané pour /gsr stats. Par niveau : pages valides sur le GPU, dont non vides, splats.
+     * Files : captures en attente, pages grossières en anti-rebond, tâches workers, pages prêtes non envoyées.
+     */
+    public record Stats(int slotsPerLevel, int[] pages, int[] nonEmptyPages, long[] splats,
+                        int captureQueue, int coarsePending, int inFlight, int readyQueue,
+                        int summaries, long totalUploads) {}
+
+    public Stats stats() {
+        int levels = clipmap.levels(), per = cfg.slotsPerLevel();
+        int[] pages = new int[levels], nonEmpty = new int[levels];
+        long[] splats = new long[levels];
+        for (int s = 0; s < slotSplats.length; s++) {
+            int c = slotSplats[s];
+            if (c < 0) continue;
+            int L = s / per;
+            pages[L]++;
+            if (c > 0) nonEmpty[L]++;
+            splats[L] += c;
+        }
+        return new Stats(per, pages, nonEmpty, splats, captureQueued.size(), coarseDue.size(),
+                inFlight.get(), ready.size(), summaries.size(), totalUploads);
     }
 
     @Override

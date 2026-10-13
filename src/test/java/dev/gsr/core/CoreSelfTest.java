@@ -71,6 +71,26 @@ public final class CoreSelfTest {
         gpu.frame.setCamera(bx + 0.5, by + 0.5, bz + 0.5);
     }
 
+    /** /gsr stats doit refléter exactement la méta reçue par le « GPU », niveau par niveau. */
+    static void checkStats(GaussianChunkManager m, CpuReferenceTracer gpu, GsrConfig cfg, String when) {
+        GaussianChunkManager.Stats st = m.stats();
+        int per = cfg.slotsPerLevel();
+        boolean same = true, allLevels = true;
+        for (int L = 0; L < cfg.levels; L++) {
+            int pages = 0, nonEmpty = 0; long splats = 0;
+            for (int s = L * per; s < (L + 1) * per; s++) {
+                int c = gpu.metaSplats(s);
+                if (c < 0) continue;
+                pages++; if (c > 0) nonEmpty++; splats += c;
+            }
+            same &= pages == st.pages()[L] && nonEmpty == st.nonEmptyPages()[L] && splats == st.splats()[L];
+            allLevels &= st.nonEmptyPages()[L] > 0;
+        }
+        boolean idle = st.captureQueue() == 0 && st.coarsePending() == 0 && st.inFlight() == 0 && st.readyQueue() == 0;
+        check(same && allLevels && idle, "stats " + when + " = méta GPU (L0 : " + st.pages()[0] + " pages, "
+                + st.splats()[0] + " splats ; files vides : " + idle + ")");
+    }
+
     public static void main(String[] args) throws Exception {
         System.out.println("== Layout");
         for (int[] d : GsrLayout.DIRS) {
@@ -132,6 +152,7 @@ public final class CoreSelfTest {
             long t0 = System.nanoTime();
             pump(m, gpu, px, py, pz);
             System.out.printf("  (génération initiale : %.0f ms)%n", (System.nanoTime() - t0) / 1e6);
+            checkStats(m, gpu, cfg, "après génération initiale");
 
             CpuReferenceTracer.Hit h = gpu.trace(0, 0, 0, 0, -1, 0, 0.05f, 300, 0, 0);
             check(Math.abs(h.hitDist - 5.5f) < 0.3f && h.transmittance < 0.05f && h.level == 0,
@@ -176,6 +197,26 @@ public final class CoreSelfTest {
                     String.format("pilier vu de l'autre côté après recentrage (attendu %.1f, dist=%.2f, L=%d)", expect, h.hitDist, h.level));
             h = gpu.trace(0, 0, 0, 0, -1, 0, 0.05f, 300, 0, 0);
             check(Math.abs(h.hitDist - 5.5f) < 0.3f && h.level == 0, "sol sous le joueur après recentrage (pages L0 recyclées)");
+            checkStats(m, gpu, cfg, "après recentrage (slots invalidés puis réécrits)");
+        }
+
+        System.out.println("== Sections non chargées (couverture L3 > distance de rendu)");
+        {
+            // Bug vu en jeu : chaque section non chargée consommait une capture du budget ; la file
+            // (~100 000 entrées) ne se vidait jamais. Ici seules 5x5 colonnes sont « chargées ».
+            GsrConfig c2 = new GsrConfig();
+            c2.capturesPerTick = 8; c2.coarseDebounceMs = 0;
+            World w2 = new World();
+            SectionSnapshotSource src = (sx, sy, sz) -> Math.abs(sx) <= 2 && Math.abs(sz) <= 2 ? w2.capture(sx, sy, sz) : null;
+            try (GaussianChunkManager m2 = new GaussianChunkManager(c2, src)) {
+                long now = 0;
+                m2.tick(8, 70, 8, now);                  // enfile toutes les sections des pages grossières
+                int initial = m2.stats().captureQueue();
+                for (int i = 0; i < 400; i++) m2.tick(8, 70, 8, now += 50);
+                int left = m2.stats().captureQueue();
+                check(initial > 50_000 && left == 0,
+                        "file de captures vidée en 400 ticks malgré les sections non chargées (" + initial + " -> " + left + ")");
+            }
         }
 
         System.out.println(failures == 0 ? "\nTOUS LES TESTS PASSENT" : "\n" + failures + " ÉCHEC(S)");

@@ -4,6 +4,8 @@ import static org.lwjgl.opengl.GL43C.*;
 
 /** Cibles écran du mode autonome : reflet brut, historique (ping-pong), distance caméra (ping-pong). */
 public final class GsrScreenTargets {
+    /** reflet RGBA16F 8 + profondeur opaque R32F 4 + 2 × historique RGBA16F 8 + 2 × distance R32F 4. */
+    public static final int BYTES_PER_PIXEL = 8 + 4 + 2 * 8 + 2 * 4;
     public int width = -1, height = -1;
     public int reflection;
     /** Profondeur opaque copiée avant la couche translucide (masque eau/translucide). */

@@ -99,7 +99,7 @@ déclenche aucune reconstruction.
   `ivec4(pageXYZ, count)` permet au shader de rejeter un slot périmé.
 * **Budget par défaut** : 1024 slots × 64 Kio = **64 Mio** de splats + 2 Mio de cellules + 16 Kio de
   méta. Réglable (`pagesX/Y/Z`, `levels`, `maxSplatsPerPage`).
-* Cibles écran du mode autonome : 32 o/pixel (≈ 118 Mo en 2560×1440) — le passage du reflet en demi-
+* Cibles écran du mode autonome : 36 o/pixel (≈ 120 Mio en 2560×1369, mesuré) — le passage du reflet en demi-
   résolution est la première optimisation prévue (voir §6).
 
 ## 4. Pipeline de rendu
@@ -171,7 +171,7 @@ linéaire, écriture `rgba8` dans le framebuffer principal **avant** la main et 
 
 ## 6. État et feuille de route
 
-**Vérifié** : tout `dev.gsr.core` compile et passe 24 vérifications (`CoreSelfTest`) : format std430, clé de
+**Vérifié** : tout `dev.gsr.core` compile et passe 27 vérifications (`CoreSelfTest`, dont les stats et la file de captures) : format std430, clé de
 section signée, budget et tri par cellule, résumés, et — via `CpuReferenceTracer`, miroir ligne à ligne
 de `gsrTrace()` sur les mêmes octets — impacts au sol (L0), sur un pilier hors fenêtre L0 (trouvé en
 L1), dans l'eau translucide, en cône rugueux, après destruction de blocs et après recentrage toroïdal.
@@ -185,7 +185,30 @@ L1), dans l'eau translucide, en cône rugueux, après destruction de blocs et ap
 * rendu (captures d'écran, caméra immobile) : l'eau reflète le relief et le soleil, l'herbe et les
   arbres ne sont plus réfléchissants, main et HUD intacts.
 
-**Non vérifié** : stabilité en mouvement (scintillement, traînées), mode « Fabuleux », Sodium, Iris,
+* stabilité en mouvement : aucun scintillement constaté par l'utilisateur (en marchant et en tournant
+  la caméra au bord de l'eau) ;
+* `/gsr stats` (commande client) : pages valides / non vides / splats par niveau, files, temps GPU
+  par passe (requêtes `GL_TIME_ELAPSED` en anneau de 4 frames, jamais bloquantes), VRAM.
+
+**Mesures de référence** (avant toute optimisation ; 2560×1369, RX 7800 XT, plaine + lac, jour) :
+
+| Passe | Immobile face à l'eau | Après 10 s de course |
+|---|---|---|
+| copie profondeur | 0,02 ms | 0,02 ms |
+| reflet (SSR + GSR) | 2,48 ms | 1,93 ms |
+| temporel | 0,32 ms | 0,44 ms |
+| composition | 0,13 ms | 0,08 ms |
+| **total** | **2,95 ms** | **2,47 ms** |
+
+Splats chargés : ≈ 60–80 k (L0), 120–160 k (L1), 100–115 k (L2), 15–18 k (L3) ; VRAM 66 Mio de SSBO
++ 120 Mio de cibles écran (36 o/pixel). Téléversements à l'arrêt : 0 page/frame.
+
+**Bug corrigé grâce à ces stats** : la file de captures restait à ~100 000 entrées. La couverture L3
+(±512 blocs) dépasse la distance de rendu ; chaque section non chargée consommait une capture du
+budget, si bien que la file ne se vidait jamais. Désormais seule une vraie copie consomme le budget
+(tentatives plafonnées à 64 × budget par tick). Test de non-régression dans `CoreSelfTest`.
+
+**Non vérifié** : mode « Fabuleux », Sodium, Iris,
 pilotes NVIDIA/Intel, nuit/pluie/Nether, coût GPU (pas encore de requêtes `GL_TIME_ELAPSED`).
 
 Prochaines étapes, par ordre de rentabilité :
