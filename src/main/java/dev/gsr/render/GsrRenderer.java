@@ -11,6 +11,7 @@ import net.minecraft.client.gl.Framebuffer;
 import net.minecraft.util.math.Vec3d;
 import org.joml.Matrix4f;
 import org.lwjgl.opengl.GL;
+import org.lwjgl.opengl.GLCapabilities;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 
@@ -52,11 +53,13 @@ public final class GsrRenderer {
 
     private boolean ensureInit(GsrConfig cfg) {
         if (initialized || failed) return initialized;
-        if (!GL.getCapabilities().OpenGL43) {
+        String glInfo = glGetString(GL_VERSION) + " / " + glGetString(GL_RENDERER) + " / GLSL " + glGetString(GL_SHADING_LANGUAGE_VERSION);
+        if (!supportsGl43Features()) {
             failed = true;
-            GsrClient.LOG.warn("GSR désactivé : OpenGL 4.3 (compute + SSBO) indisponible (macOS plafonne à 4.1).");
+            GsrClient.LOG.warn("GSR désactivé : compute shaders + SSBO indisponibles ({}). macOS plafonne à 4.1.", glInfo);
             return false;
         }
+        GsrClient.LOG.info("GSR : contexte {}", glInfo);
         try {
             gpu = new GsrGpuResources(cfg);
             progReflect = GsrShaderLoader.compileCompute("gsr_reflect.comp", cfg.ssboBindingBase);
@@ -68,6 +71,28 @@ public final class GsrRenderer {
             GsrClient.LOG.error("GSR désactivé : initialisation GPU impossible", e);
         }
         return initialized;
+    }
+
+    /**
+     * Minecraft demande un contexte 3.2 Core. Certains pilotes (AMD notamment) annoncent alors exactement
+     * "3.2" bien que le matériel gère 4.6 : OpenGL43 est faux, mais les fonctions sont exposées via les
+     * extensions ARB (LWJGL partage les pointeurs core/ARB). On accepte donc l'un ou l'autre.
+     */
+    private static boolean supportsGl43Features() {
+        GLCapabilities c = GL.getCapabilities();
+        if (c.OpenGL43) return true;
+        boolean ext = c.GL_ARB_compute_shader && c.GL_ARB_shader_storage_buffer_object
+                && c.GL_ARB_shader_image_load_store && c.GL_ARB_texture_storage;
+        if (!ext) return false;
+        // Le source utilise "#version 430 core" : il faut un compilateur GLSL >= 4.30.
+        String glsl = glGetString(GL_SHADING_LANGUAGE_VERSION);
+        try {
+            String[] v = glsl.trim().split("[ .]");
+            int major = Integer.parseInt(v[0]), minor = Integer.parseInt(v[1]);
+            return major > 4 || (major == 4 && minor >= 30);
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     // ------------------------------------------------------------------ début de frame
