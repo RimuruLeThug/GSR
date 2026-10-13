@@ -41,9 +41,11 @@ void main() {
     float spec = clamp((F0 * AB.x + AB.y) * mask, 0.0, 1.0);
 
     // Compression douce des hautes lumières (le framebuffer est en 8 bits, sans tone mapping) :
-    // linéaire jusqu'à une luminance de 1, logarithmique au-delà -> plus de disque blanc saturé.
+    // linéaire jusqu'à une luminance K, logarithmique au-delà -> plus de disque blanc saturé.
+    // K = 8 : l'eau vue de haut ne réfléchit que ~3 % (Fresnel), il faut ~10-20 pour un reflet franc.
+    const float K = 8.0;
     float lum = dot(refl.rgb, vec3(0.2126, 0.7152, 0.0722));
-    vec3 reflC = lum > 1.0 ? refl.rgb * ((1.0 + log(lum)) / lum) : refl.rgb;
+    vec3 reflC = lum > K ? refl.rgb * (K * (1.0 + log(lum / K)) / lum) : refl.rgb;
 
     vec4 scene = imageLoad(uScene, px);
     vec3 sceneLin = pow(scene.rgb, vec3(2.2));
