@@ -59,3 +59,14 @@ vec3 reflection(vec3 playerPos, vec3 N, float rough, float lmSky,
 `gsrTrace()` seul, sans SSR). `./gradlew gsrTestPack` le copie avec `gsr_common.glsl` dans
 `run/shaderpacks/GSR-TestPack` ; `./gradlew runClient -PwithIris` le fait automatiquement. Vérifié avec
 Iris 1.8.8 sur pilote AMD.
+
+## Packs Complementary (Reimagined, Unbound)
+
+Vérifié le 2026-10-13 (r5.9.3, Iris 1.8.8, AMD) : avec GSR installé, les deux packs se chargent et
+s'affichent normalement, GSR passe en mode service. Ils n'appellent pas `gsrTrace()` : leurs reflets
+restent les leurs (marche en espace écran, puis ciel ou leurs reflets en espace monde voxelisés), sans
+apport de GSR. Le point d'accroche naturel serait `AddBackgroundReflection()` dans
+`lib/materials/materialMethods/reflections.glsl`, appelé quand leur marche écran échoue
+(`reflection.a < 1`). Leur licence (Complementary License 1.7) ne couvre pas la modification du code hors
+d'un « Modified Pack » redistribué sous conditions : l'intégration relève donc de leurs auteurs, ou d'un
+pack dérivé conforme à cette licence. Aucun fichier de ces packs n'est copié dans ce dépôt.

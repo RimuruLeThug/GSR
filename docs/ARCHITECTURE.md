@@ -253,6 +253,7 @@ caméra figée) :
 | Sodium 0.6.13 | reflets corrects, main et HUD intacts | 1,52 % | 0,40 % |
 | Iris 1.8.8 sans shaderpack | mode autonome, reflets corrects | 0,84 % | 0,37 % |
 | Iris 1.8.8 + Complementary Reimagined r5.9.3 | mode service (passes autonomes coupées), aucune exception | — | — |
+| Iris 1.8.8 + Complementary Unbound r5.9.3 (2026-10-13) | mode service, aucune exception ; reflets du pack seuls (aucun appel à `gsrTrace()`) | — | — |
 | Mode « Fabuleux » | reflets corrects (profondeur lue dans le framebuffer translucide) | 1,89 % | 0,64 % |
 
 Tests de compatibilité : `./gradlew runClient -PwithSodium` ou `-PwithIris` (Sodium + Iris + leurs
