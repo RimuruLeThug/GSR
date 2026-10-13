@@ -9,6 +9,7 @@ layout(binding = 0) uniform sampler2D uDepth;
 layout(binding = 2) uniform sampler2D uReflection;     // historique accumulé (linéaire, basse résolution)
 layout(binding = 4) uniform sampler2D uReflDist;       // distance caméra du pixel représentatif (1e9 = vide)
 layout(rgba8, binding = 0) uniform image2D uScene;     // framebuffer principal (lecture/écriture)
+uniform int uDebugView;                                // 3 : reflet brut (sans Fresnel), 4 : codes d'impact bruts
 
 /*
  * Upsampling guidé par la profondeur : les 4 texels basse résolution autour du pixel, pondérés
@@ -78,5 +79,7 @@ void main() {
     vec4 scene = imageLoad(uScene, px);
     vec3 sceneLin = pow(scene.rgb, vec3(2.2));
     vec3 outLin = sceneLin * (1.0 - spec) + reflC * spec;
+    if (uDebugView == 3) outLin = reflC;
+    if (uDebugView == 4) { imageStore(uScene, px, vec4(refl.rgb, scene.a)); return; }
     imageStore(uScene, px, vec4(pow(outLin, vec3(1.0 / 2.2)), scene.a));
 }

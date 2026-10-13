@@ -265,9 +265,30 @@ Le mode service n'est vérifié qu'en « ne plante pas » : aucun pack public n'
 
 **Problèmes résolus (vérifiés par l'utilisateur le 2026-10-13, commit `c30a21b`)** : plus de
 scintillement de l'eau en marchant et en tournant la caméra, plus de nuage vert au ras de l'eau. Les
-corrections de couleur et du SSR (`2265201`) suffisaient. **Reste, mineur** : une légère nuance marron
-dans les reflets de l'eau au bord de l'écran, probablement au raccord SSR → GSR (terre des faces latérales
-dans le GSR). Pas prioritaire ; la teinte de biome peut la réduire.
+corrections de couleur et du SSR (`2265201`) suffisaient.
+
+**Nuance marron au bord de l'écran : corrigée** (2026-10-13, vue de l'utilisateur rejouée en mode
+spectateur). Près du bord, le SSR passe la main au GSR. Deux défauts du GSR y donnaient un reflet de terre
+ou de ciel au lieu de l'herbe :
+1. Les plantes (herbes hautes, fleurs, fougères, canne à sucre) étaient de l'air dans
+   `BlockMaterialTable` : sous une prairie, le reflet GSR montrait le ciel, ou le talus en terre derrière.
+   Elles sont maintenant `KIND_TRANSLUCENT`, avec pour opacité la couverture moyenne de leurs textures
+   (bornée 40..200), si leur contour fait au moins ½ bloc de haut et 6/16 de large (torches, rails et
+   nénuphars exclus).
+2. Les surfels débordaient de leur face : opaques jusqu'à ~0,53 voxel du centre, encore ~55 % à 0,8. Le
+   flanc immergé d'un bloc de rive masquait donc, au-dessus de l'eau, les touffes et le talus.
+   `gsrTrace()` et `CpuReferenceTracer` découpent désormais chaque splat au carré de sa face
+   (`GSR_EDGE_SOFT` = `EDGE_SOFT` = 0,15 voxel de fondu). Un point n'étant plus couvert que par un splat,
+   `baseOpacity` passe de 0,95 à 1,0 (sinon 5 % de ciel traversait les sols). Tests ajoutés : « rayon
+   rasant au-dessus de la berge » (T = 0,364 avant, > 0,95 après) et « rayon sous l'eau vers la berge ».
+   Le test du masque de briques tolère maintenant 1/1000 d'écarts. Le parcours sans masque (debug)
+   n'applique pas la borne de niveau du cône dans les cellules occupées, et 1 rayon rugueux sur 4000 y
+   manque un sol que L2 contient. Avant, le débordement des disques masquait cet écart.
+
+Mesure au bord gauche (x = 60, sous la berge) : #757875 (ciel délavé) avant, #445859 (herbe sombre)
+après. Outils ajoutés : `/gsr debug raw` (reflet GSR sans Fresnel) et `/gsr debug hit` (r =
+transmittance, g = distance / 16, b = (niveau + 1) / 4), capturés aussi par l'autoshot. Limite : le
+reflet GSR d'une touffe reste un voile vert flou (σ = 0,55 bloc), moins net que le SSR.
 
 Historique du diagnostic :
 * **Scintillement de l'eau** signalé par l'utilisateur, absent avant le masque de briques et la
@@ -338,8 +359,8 @@ Prochaines étapes, par ordre de rentabilité :
    trop clair) formait un amas vert vif. Il ne se raccordait pas au SSR, d'où une bande verte qui
    suivait le bord de l'écran, là où le SSR passe la main. Vérifié par captures `/gsr debug gsr` avant/après.
    Teinte de biome par position : faite (voir plus haut).
-   Outils de diagnostic : `/gsr debug normal|ssr|gsr`, `/gsr bricks on|off`, et
-   `gradlew runClient -PgsrAutoshot=<préfixe>` (3 captures automatiques, une par vue, dans `run/screenshots`).
+   Outils de diagnostic : `/gsr debug normal|ssr|gsr|raw|hit`, `/gsr bricks on|off`, et
+   `gradlew runClient -PgsrAutoshot=<préfixe>` (5 captures automatiques, une par vue, dans `run/screenshots`).
    `-PgsrCmds="tp @s x y z;time set 18000|gsr stats"` envoie des commandes 5 s après l'entrée dans le
    monde (et la partie après `|`, 13 s avant les captures, qui commencent alors à 45 s).
    Corrigés au passage : SSR, test d'épaisseur fait **après** le raffinement binaire (un pas grossier

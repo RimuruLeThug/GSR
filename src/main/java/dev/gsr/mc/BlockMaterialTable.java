@@ -118,8 +118,17 @@ public final class BlockMaterialTable {
                     k = GsrLayout.KIND_OPAQUE;
                 } else if (s.isFullCube(EmptyBlockView.INSTANCE, BlockPos.ORIGIN)) {
                     k = GsrLayout.KIND_TRANSLUCENT; a = 90;           // verre, glace, slime...
+                } else if (solidEnough(s)) {
+                    k = GsrLayout.KIND_OPAQUE;                         // dalles, escaliers
+                } else if (vegetationLike(s)) {
+                    // Herbes, fleurs, fougères, canne à sucre : voile translucide de l'opacité de leurs
+                    // textures. En air, le repli GSR montrait le côté en terre du bloc derrière une touffe
+                    // de rive que le SSR ratait (reflet marron, plante absente du reflet).
+                    float cov = modelCoverage(s, models, sprites, rnd);
+                    k = cov > 0f ? GsrLayout.KIND_TRANSLUCENT : GsrLayout.KIND_AIR;
+                    a = Math.max(40, Math.min(200, Math.round(cov * 255f)));
                 } else {
-                    k = solidEnough(s) ? GsrLayout.KIND_OPAQUE : GsrLayout.KIND_AIR; // dalles, escaliers / fleurs, torches
+                    k = GsrLayout.KIND_AIR;                            // torches, rails, nénuphars
                 }
                 if (k != GsrLayout.KIND_AIR) {
                     faces = modelFaceColors(s, models, tints, sprites, rnd, type);
@@ -279,6 +288,43 @@ public final class BlockMaterialTable {
             return (c == null || c == MapColor.CLEAR) ? 0xC8C8C8 : c.color;
         } catch (Throwable t) {
             return 0x808080;
+        }
+    }
+
+    /** Sans collision mais assez grand pour compter dans un reflet : contour d'au moins ½ bloc de haut et 6/16 de large (fleurs oui, torches non). */
+    private static boolean vegetationLike(BlockState s) {
+        try {
+            VoxelShape shape = s.getOutlineShape(EmptyBlockView.INSTANCE, BlockPos.ORIGIN);
+            if (shape.isEmpty()) return false;
+            Box b = shape.getBoundingBox();
+            return b.maxY - b.minY >= 0.5 && Math.min(b.maxX - b.minX, b.maxZ - b.minZ) >= 0.35;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * Opacité vue de côté d'une plante en croix : deux plans de couverture c chacun, un rayon en traverse
+     * en moyenne un seul par face de voxel franchie (le splat d'entrée et celui de sortie) → c.
+     */
+    private static float modelCoverage(BlockState s, BlockRenderManager models, SpriteAverages sprites, Random rnd) {
+        try {
+            BakedModel model = models.getModel(s);
+            List<BakedQuad> quads = new ArrayList<>();
+            rnd.setSeed(42L);
+            quads.addAll(model.getQuads(s, null, rnd));
+            for (Direction d : Direction.values()) { rnd.setSeed(42L); quads.addAll(model.getQuads(s, d, rnd)); }
+            float sum = 0f;
+            int n = 0;
+            for (BakedQuad q : quads) {
+                float[] avg = sprites.average(q.getSprite());
+                if (avg == null) continue;
+                sum += avg[3];
+                n++;
+            }
+            return n == 0 ? 0f : sum / n;
+        } catch (Throwable t) {
+            return 0f;
         }
     }
 

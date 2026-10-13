@@ -11,6 +11,13 @@ import java.nio.ByteOrder;
 public final class CpuReferenceTracer implements GpuSink {
     /** = GSR_ALPHA_GAIN */
     public static final float ALPHA_GAIN = 1.6f;
+    /** = GSR_EDGE_SOFT : découpe des surfels au carré de leur face, fondu sur cette fraction de voxel. */
+    public static final float EDGE_SOFT = 0.15f;
+    /** = smoothstep GLSL. */
+    static float smoothstep(float e0, float e1, float x) {
+        float t = Math.max(0f, Math.min(1f, (x - e0) / (e1 - e0)));
+        return t * t * (3f - 2f * t);
+    }
     private final GsrConfig cfg;
     private final int[] meta;
     private final int[] cells;
@@ -136,7 +143,11 @@ public final class CpuReferenceTracer implements GpuSink {
                         if (ts < tMin || ts < t - 2f * st || ts > tExit + 2f * st) continue;
                         float m2 = a * (ovx * ovx + ovy * ovy + ovz * ovz) + b * on * on - dSo * dSo / dSd;
                         float opacity = (rgba >>> 24) / 255f;
-                        float alpha = Math.min(opacity * Math.min(1f, ALPHA_GAIN * (float) Math.exp(-0.5f * Math.max(m2, 0f))), 0.99f);
+                        float qx = ovx + dx * ts, qy = ovy + dy * ts, qz = ovz + dz * ts;
+                        float qn = qx * n[0] + qy * n[1] + qz * n[2];
+                        float e = Math.max(Math.abs(qx - n[0] * qn), Math.max(Math.abs(qy - n[1] * qn), Math.abs(qz - n[2] * qn)));
+                        float edge = 1f - smoothstep(0.5f * vs, (0.5f + EDGE_SOFT) * vs, e);
+                        float alpha = Math.min(opacity * Math.min(1f, ALPHA_GAIN * (float) Math.exp(-0.5f * Math.max(m2, 0f))), 0.99f) * edge;
                         if (alpha < 1f / 255f) continue;
                         sumA += alpha; keep *= 1f - alpha; sumT += alpha * ts;
                         // radiance simplifiée : albédo linéaire (l'éclairage est testé séparément)

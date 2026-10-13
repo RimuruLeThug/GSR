@@ -12,7 +12,7 @@ layout(binding = 1) uniform sampler2D uSceneColor;
 layout(rgba16f, binding = 0) writeonly uniform image2D uReflOut;
 
 uniform float uMaxTrace;
-uniform int   uDebugView;   // 0 normal, 1 SSR seul (ciel en repli), 2 GSR seul
+uniform int   uDebugView;   // 0 normal, 1 SSR seul (ciel en repli), 2 GSR seul, 3 GSR brut, 4 impact GSR
 
 const int SSR_STEPS  = 48;
 const int SSR_REFINE = 6;
@@ -95,7 +95,7 @@ void main() {
     // ---- 1) SSR (précis, mais limité à ce que la caméra voit) ----
     vec3 rV = normalize(mat3(uView) * R);
     vec2 hitUV; float ssrDist;
-    float conf = uDebugView == 2 ? 0.0 : ssrTrace(vp + nV * 0.02, rV, px, hitUV, ssrDist);
+    float conf = uDebugView >= 2 ? 0.0 : ssrTrace(vp + nV * 0.02, rV, px, hitUV, ssrDist);
     vec3 ssrCol = conf > 0.0 ? pow(textureLod(uSceneColor, hitUV, 0.0).rgb, vec3(2.2)) : vec3(0.0);
 
     vec3  col  = ssrCol;
@@ -112,6 +112,8 @@ void main() {
         vec3 g = gh.radiance + gh.transmittance * gsrSkyRadiance(R);
         col  = mix(g, ssrCol, conf);
         dist = mix(gh.hitDist, ssrDist, conf);
+        // Vue « hit » : r = transmittance, g = distance / 16, b = (niveau + 1) / 4 (0 = rien touché)
+        if (uDebugView == 4) col = vec3(gh.transmittance, gh.hitDist / 16.0, float(gh.level + 1) / 4.0);
     }
     imageStore(uReflOut, lp, vec4(col, dist));
 }

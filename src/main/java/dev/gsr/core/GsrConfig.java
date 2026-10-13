@@ -17,7 +17,7 @@ public final class GsrConfig {
     /** Écart-type normal (épaisseur du disque gaussien), en fraction du voxel. */
     public float sigmaNormal = 0.1f;
     /** Opacité de base d'un splat opaque. */
-    public float baseOpacity = 0.95f;
+    public float baseOpacity = 1.0f;   // surfels découpés à leur face : un seul couvre un point, 0,95 laissait passer 5 % de ciel
 
     public int workerThreads = Math.max(1, Runtime.getRuntime().availableProcessors() / 4);
     /** Snapshots de sections pris sur le thread principal par tick (coût : copie de PalettedContainer). */

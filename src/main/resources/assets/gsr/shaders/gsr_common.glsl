@@ -26,6 +26,10 @@
 #ifndef GSR_ALPHA_GAIN
 #define GSR_ALPHA_GAIN 1.6
 #endif
+// Découpe des surfels au carré de leur face (demi-côté = ½ voxel), fondu sur cette fraction de voxel.
+// Sans elle, le disque (opaque jusqu'à ~0,53 voxel du centre, encore ~55 % à 0,8) débordait de sa face :
+// le flanc immergé d'un bloc de rive masquait au-dessus de l'eau les touffes et talus (reflet marron).
+#define GSR_EDGE_SOFT 0.15
 
 struct GsrFrame {
     ivec4 camBlock;                    // xyz bloc caméra, w index de frame
@@ -233,7 +237,11 @@ GsrHit gsrTrace(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float c
                     if (ts < tMin || ts < t - 2.0 * st || ts > tExit + 2.0 * st) continue;
                     float m2 = a * dot(o, o) + b * on * on - dSo * dSo / dSd;
                     vec4  col = gsrUnpackRGBA(s.data.x);
-                    float alpha = min(col.a * min(1.0, GSR_ALPHA_GAIN * exp(-0.5 * max(m2, 0.0))), 0.99);
+                    vec3  q  = o + rd * ts;                        // point du rayon, relatif au centre
+                    vec3  qt = abs(q - n * dot(q, n));             // faces alignées sur les axes
+                    float e  = max(qt.x, max(qt.y, qt.z));
+                    float edge = 1.0 - smoothstep(0.5 * float(vs), (0.5 + GSR_EDGE_SOFT) * float(vs), e);
+                    float alpha = min(col.a * min(1.0, GSR_ALPHA_GAIN * exp(-0.5 * max(m2, 0.0))), 0.99) * edge;
                     if (alpha < 1.0 / 255.0) continue;
                     sumA += alpha; keep *= 1.0 - alpha; sumT += alpha * ts;
                     sumC += alpha * gsrShadeSplat(col.rgb, n, s.data.y);

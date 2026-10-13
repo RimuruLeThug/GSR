@@ -234,6 +234,7 @@ public final class GsrRenderer {
             // 3) composition dans le framebuffer principal
             glUseProgram(progComposite);
             setCommon(progComposite, proj, invProj, view, invView, w, h, cfg);
+            glUniform1i(loc(progComposite, "uDebugView"), cfg.debugView);
             bindTex(0, depthTex);
             bindTex(2, targets.history[cur]);
             bindTex(4, targets.distance[cur]);

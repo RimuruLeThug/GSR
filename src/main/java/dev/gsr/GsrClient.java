@@ -102,9 +102,10 @@ public final class GsrClient implements ClientModInitializer {
                                     c.getSource().sendFeedback(Text.literal("GSR : reflet en 1/" + CONFIG.standaloneResolutionScale + " de résolution"));
                                     return 1;
                                 })))
-                        // /gsr debug normal|ssr|gsr : isole la source du reflet (diagnostic d'artefacts)
+                        // /gsr debug normal|ssr|gsr|raw|hit : isole la source du reflet ; raw = GSR sans Fresnel, hit = T / distance / niveau en r / g / b
                         .then(ClientCommandManager.literal("debug")
-                                .then(debugView("normal", 0)).then(debugView("ssr", 1)).then(debugView("gsr", 2)))
+                                .then(debugView("normal", 0)).then(debugView("ssr", 1)).then(debugView("gsr", 2))
+                                .then(debugView("raw", 3)).then(debugView("hit", 4)))
                         // /gsr bricks on|off : masque de briques (mesure avant/après au même endroit)
                         .then(ClientCommandManager.literal("bricks")
                                 .then(brickToggle("on", true)).then(brickToggle("off", false)))));
@@ -122,11 +123,11 @@ public final class GsrClient implements ClientModInitializer {
 
     /**
      * Développement : -Dgsr.autoshot=<préfixe> prend, 15 s après l'entrée dans le monde, une capture par
-     * vue de debug (normal, ssr, gsr) dans run/screenshots/<préfixe>_<vue>.png, sans intervention.
+     * vue de debug (normal, ssr, gsr, raw, hit) dans run/screenshots/<préfixe>_<vue>.png, sans intervention.
      * Le joueur réapparaît où il s'est déconnecté : on retrouve la vue d'une session précédente.
      */
     private static final String AUTOSHOT = System.getProperty("gsr.autoshot");
-    private static final String[] AUTOSHOT_VIEWS = {"normal", "ssr", "gsr"};
+    private static final String[] AUTOSHOT_VIEWS = {"normal", "ssr", "gsr", "raw", "hit"};
     /**
      * Rafales de scintillement, après les vues : par configuration, FLICKER_FRAMES captures à un tick
      * d'intervalle, caméra immobile. « off » (mod coupé) mesure l'animation propre de l'eau vanilla.
