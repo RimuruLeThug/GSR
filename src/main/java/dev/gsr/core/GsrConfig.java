@@ -52,9 +52,9 @@ public final class GsrConfig {
 
     // ---- Debug (non persistant, /gsr debug et /gsr bricks) ----
     /** 0 = normal, 1 = SSR seul (ciel en repli, sans GSR), 2 = GSR seul (sans SSR). */
-    public int debugView = 0;
+    public transient int debugView = 0;
     /** Faux = parcours cellule par cellule (frame.iparams.y bit 0), pour mesurer le gain du masque. */
-    public boolean brickMask = true;
+    public transient boolean brickMask = true;
 
     public long debounceForLevel(int level) {
         long d = coarseDebounceMs;
@@ -67,8 +67,44 @@ public final class GsrConfig {
 
     public GsrConfig validate() {
         levels = Math.max(1, Math.min(GsrLayout.MAX_LEVELS, levels));
-        standaloneResolutionScale = Math.max(1, Math.min(2, standaloneResolutionScale));
+        pagesX = clamp(pagesX, 2, 32); pagesY = clamp(pagesY, 2, 32); pagesZ = clamp(pagesZ, 2, 32);
         if (maxSplatsPerPage > 0xFFFF) throw new IllegalArgumentException("maxSplatsPerPage > 65535 (offset 16 bits)");
+        maxSplatsPerPage = Math.max(64, maxSplatsPerPage);
+        if (!(sigmaTangent > 0f)) sigmaTangent = 0.55f;
+        if (!(sigmaNormal > 0f)) sigmaNormal = 0.1f;
+        baseOpacity = clampF(baseOpacity, 0f, 1f);
+        workerThreads = clamp(workerThreads, 1, 64);
+        capturesPerTick = Math.max(1, capturesPerTick);
+        coarseJobsPerTick = Math.max(1, coarseJobsPerTick);
+        uploadsPerFrame = Math.max(1, uploadsPerFrame);
+        coarseDebounceMs = Math.max(0, coarseDebounceMs);
+        ssboBindingBase = clamp(ssboBindingBase, 0, 92);
+        standaloneRoughness = clampF(standaloneRoughness, 0f, 1f);
+        standaloneStrength = clampF(standaloneStrength, 0f, 4f);
+        standaloneFloorStrength = clampF(standaloneFloorStrength, 0f, 4f);
+        standaloneResolutionScale = Math.max(1, Math.min(2, standaloneResolutionScale));
+        if (!(maxTraceDistance > 0f)) maxTraceDistance = 384f;
         return this;
+    }
+
+    private static int clamp(int v, int lo, int hi) { return Math.max(lo, Math.min(hi, v)); }
+    /** NaN -> borne basse. */
+    private static float clampF(float v, float lo, float hi) { return v >= lo ? Math.min(hi, v) : lo; }
+
+    /**
+     * Rechargement à chaud : copie les champs modifiables en cours de partie. Les champs qui fixent la
+     * taille des SSBO, les points de liaison ou les threads ne changent qu'au redémarrage.
+     * @return vrai si un de ces champs structurels diffère (redémarrage nécessaire pour l'appliquer)
+     */
+    public boolean copyRuntimeFrom(GsrConfig o) {
+        sigmaTangent = o.sigmaTangent; sigmaNormal = o.sigmaNormal; baseOpacity = o.baseOpacity;
+        capturesPerTick = o.capturesPerTick; coarseJobsPerTick = o.coarseJobsPerTick;
+        uploadsPerFrame = o.uploadsPerFrame; coarseDebounceMs = o.coarseDebounceMs;
+        standaloneEnabled = o.standaloneEnabled; standaloneRoughness = o.standaloneRoughness;
+        standaloneStrength = o.standaloneStrength; standaloneFloorStrength = o.standaloneFloorStrength;
+        standaloneResolutionScale = o.standaloneResolutionScale; maxTraceDistance = o.maxTraceDistance;
+        return levels != o.levels || pagesX != o.pagesX || pagesY != o.pagesY || pagesZ != o.pagesZ
+                || maxSplatsPerPage != o.maxSplatsPerPage || ssboBindingBase != o.ssboBindingBase
+                || workerThreads != o.workerThreads;
     }
 }

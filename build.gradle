@@ -30,9 +30,10 @@ tasks.register('coreSelfTest', JavaExec) {
 }
 
 // Développement : ./gradlew runClient -PgsrAutoshot=<préfixe> -> captures automatiques normal/ssr/gsr
-// dans run/screenshots (voir GsrClient#autoShot).
+// dans run/screenshots (voir GsrClient#autoShot). -PgsrCmds="cmd1;cmd2" : commandes avant les captures.
 tasks.named('runClient', JavaExec) {
     if (project.hasProperty('gsrAutoshot')) systemProperty 'gsr.autoshot', project.property('gsrAutoshot')
+    if (project.hasProperty('gsrCmds')) systemProperty 'gsr.autoshotCmds', project.property('gsrCmds')
 }
 
 processResources {

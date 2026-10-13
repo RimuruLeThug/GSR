@@ -5,10 +5,12 @@ import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import dev.gsr.compat.IrisCompat;
 import dev.gsr.core.GaussianChunkManager;
 import dev.gsr.core.GsrConfig;
+import dev.gsr.core.GsrLayout;
 import dev.gsr.mc.BlockMaterialTable;
 import dev.gsr.mc.McSnapshotSource;
 import dev.gsr.render.GsrRenderer;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
@@ -16,7 +18,10 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
+import net.minecraft.block.Block;
+import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.color.world.BiomeColors;
 import net.minecraft.client.util.ScreenshotRecorder;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.text.Text;
@@ -35,7 +40,8 @@ import java.util.List;
 public final class GsrClient implements ClientModInitializer {
     public static final Logger LOG = LoggerFactory.getLogger("gsr");
 
-    private static final GsrConfig CONFIG = new GsrConfig().validate();
+    private static final java.nio.file.Path CONFIG_FILE = FabricLoader.getInstance().getConfigDir().resolve("gsr.json");
+    private static final GsrConfig CONFIG = GsrConfigFile.load(CONFIG_FILE);
     private static final GsrRenderer RENDERER = new GsrRenderer();
     private static BlockMaterialTable materials;
     private static GaussianChunkManager manager;
@@ -74,6 +80,13 @@ public final class GsrClient implements ClientModInitializer {
                             for (String line : statsLines()) c.getSource().sendFeedback(Text.literal(line));
                             return 1;
                         }))
+                        // /gsr reload : relit config/gsr.json (champs structurels : au redémarrage)
+                        .then(ClientCommandManager.literal("reload").executes(c -> {
+                            boolean restart = CONFIG.copyRuntimeFrom(GsrConfigFile.load(CONFIG_FILE));
+                            c.getSource().sendFeedback(Text.literal("GSR : configuration rechargée"
+                                    + (restart ? " (niveaux, pages, splats/page, liaisons ou threads : appliqués au prochain démarrage)" : "")));
+                            return 1;
+                        }))
                         // /gsr scale 1|2 : résolution des passes reflet + temporel (mesures avant/après)
                         .then(ClientCommandManager.literal("scale")
                                 .then(ClientCommandManager.argument("factor", IntegerArgumentType.integer(1, 2)).executes(c -> {
@@ -108,10 +121,23 @@ public final class GsrClient implements ClientModInitializer {
     private static final int FLICKER_FRAMES = 8;
     private static int autoShotTicks;
 
+    /**
+     * -Dgsr.autoshotCmds="locate biome minecraft:swamp;time set noon" : commandes envoyées 5 s après
+     * l'entrée dans le monde (téléportation, heure, météo), avant les captures. Le résultat apparaît
+     * dans le log ([CHAT]). Ce qui suit un « | » est envoyé juste avant la première capture (ex. gsr stats).
+     */
+    private static final String AUTOSHOT_CMDS = System.getProperty("gsr.autoshotCmds");
+
     private static void autoShot(MinecraftClient client) {
         if (client.world == null || client.player == null) return;
+        if (AUTOSHOT_CMDS != null && (autoShotTicks == 100 || autoShotTicks == 880)) {
+            String[] parts = AUTOSHOT_CMDS.split("\\|", 2);
+            String part = autoShotTicks == 100 ? parts[0] : parts.length > 1 ? parts[1] : "";
+            for (String cmd : part.split(";"))
+                if (!cmd.isBlank()) client.player.networkHandler.sendChatCommand(cmd.strip());
+        }
         // Vue i à 300 + 60·i ticks ; entre deux, 60 ticks pour que l'historique temporel se stabilise.
-        int t = ++autoShotTicks - 300;
+        int t = ++autoShotTicks - (AUTOSHOT_CMDS != null ? 900 : 300);   // téléportation : laisser générer
         if (t < 0) return;
         if (t < 60 * AUTOSHOT_VIEWS.length) {
             if (t % 60 != 0) return;
@@ -198,6 +224,17 @@ public final class GsrClient implements ClientModInitializer {
         out.add(String.format("Files : captures %d, grossières %d, workers %d, prêtes %d ; résumés %,d ; uploads %,d",
                 s.captureQueue(), s.coarsePending(), s.inFlight(), s.readyQueue(), s.summaries(), s.totalUploads()));
         RENDERER.appendStats(out, CONFIG, standaloneActive());
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player != null && materials != null && currentWorld != null) {
+            var pos = mc.player.getBlockPos();
+            int grass = currentWorld.getColor(pos, BiomeColors.GRASS_COLOR) & 0xFFFFFF;
+            int foliage = currentWorld.getColor(pos, BiomeColors.FOLIAGE_COLOR) & 0xFFFFFF;
+            int water = currentWorld.getColor(pos, BiomeColors.WATER_COLOR) & 0xFFFFFF;
+            int id = Block.getRawIdFromState(Blocks.GRASS_BLOCK.getDefaultState());
+            out.add(String.format("Biome : herbe #%06X, feuillage #%06X, eau #%06X -> dessus d'herbe #%06X (plaine #%06X)",
+                    grass, foliage, water, materials.albedo(id, GsrLayout.FACE_UP, grass) & 0xFFFFFF,
+                    materials.albedo(id, GsrLayout.FACE_UP) & 0xFFFFFF));
+        }
         return out;
     }
 

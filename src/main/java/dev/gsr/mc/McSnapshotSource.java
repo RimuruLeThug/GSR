@@ -5,9 +5,12 @@ import dev.gsr.core.SectionSnapshotSource;
 import dev.gsr.core.VoxelSource;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
+import net.minecraft.client.color.world.BiomeColors;
 import net.minecraft.client.world.ClientWorld;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkSectionPos;
 import net.minecraft.world.LightType;
+import net.minecraft.world.biome.ColorResolver;
 import net.minecraft.world.chunk.ChunkNibbleArray;
 import net.minecraft.world.chunk.ChunkSection;
 import net.minecraft.world.chunk.PalettedContainer;
@@ -19,10 +22,16 @@ import net.minecraft.world.chunk.WorldChunk;
  * On COPIE les PalettedContainer et les ChunkNibbleArray (quelques Kio) : les workers lisent ensuite
  * des données figées, sans jamais toucher au monde vivant ni à ses verrous. C'est le même principe
  * que les ChunkRendererRegion vanilla / les sections clonées de Sodium.
+ *
+ * Teinte de biome : si la section contient des blocs teintés (herbe, feuillage, eau), on lit la couleur
+ * du biome (déjà lissée par le « biome blend » vanilla) sur une grille 4×4 de colonnes, au centre de
+ * chaque carré de 4×4 blocs (la résolution des biomes), à mi-hauteur de la section, puis on
+ * l'interpole bilinéairement par colonne. 16 lectures par type au lieu de 256.
  */
 public final class McSnapshotSource implements SectionSnapshotSource {
     private final ClientWorld world;
     private final BlockMaterialTable materials;
+    private final BlockPos.Mutable cursor = new BlockPos.Mutable();
 
     public McSnapshotSource(ClientWorld world, BlockMaterialTable materials) {
         this.world = world;
@@ -31,6 +40,7 @@ public final class McSnapshotSource implements SectionSnapshotSource {
 
     // ordre : centre, puis GsrLayout.DIRS (-X +X -Y +Y -Z +Z)
     private static final int[][] OFFS = {{0, 0, 0}, {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}};
+    private static final ColorResolver[] RESOLVERS = {null, BiomeColors.GRASS_COLOR, BiomeColors.FOLIAGE_COLOR, BiomeColors.WATER_COLOR};
 
     @Override
     public VoxelSource capture(int sx, int sy, int sz) {
@@ -64,13 +74,53 @@ public final class McSnapshotSource implements SectionSnapshotSource {
             ChunkNibbleArray b = world.getLightingProvider().get(LightType.BLOCK).getLightSection(p);
             if (b != null) blk[i] = b.copy();
         }
-        return new Snapshot(materials, states, sky, blk, belowWorld, hasSky);
+        return new Snapshot(materials, states, sky, blk, belowWorld, hasSky, sampleTints(center, sx, sy, sz));
+    }
+
+    /** Teintes par type (index TINT_*), 16×16 colonnes 0xRRGGBB, ou null pour un type absent de la section. */
+    private int[][] sampleTints(ChunkSection center, int sx, int sy, int sz) {
+        int[] mask = new int[1];
+        center.getBlockStateContainer().hasAny(st -> {
+            mask[0] |= 1 << materials.tintType(Block.getRawIdFromState(st));
+            return false;   // parcourt toute la palette
+        });
+        int[][] out = new int[4][];
+        int[] grid = new int[16];
+        for (int type = 1; type < 4; type++) {
+            if ((mask[0] & (1 << type)) == 0) continue;
+            for (int j = 0; j < 4; j++)
+                for (int i = 0; i < 4; i++) {
+                    cursor.set(sx * 16 + i * 4 + 2, sy * 16 + 8, sz * 16 + j * 4 + 2);
+                    grid[i + 4 * j] = world.getColor(cursor, RESOLVERS[type]);
+                }
+            int[] col = new int[256];
+            for (int z = 0; z < 16; z++)
+                for (int x = 0; x < 16; x++)
+                    col[x + 16 * z] = bilinear(grid, x, z);
+            out[type] = col;
+        }
+        return out;
+    }
+
+    /** Interpolation entre les centres d'échantillons (x = 2, 6, 10, 14), bornée aux bords. */
+    private static int bilinear(int[] grid, int x, int z) {
+        float fx = Math.max(0f, Math.min(3f, (x - 2f) / 4f)), fz = Math.max(0f, Math.min(3f, (z - 2f) / 4f));
+        int x0 = Math.min(2, (int) fx), z0 = Math.min(2, (int) fz);
+        float tx = fx - x0, tz = fz - z0;
+        int c00 = grid[x0 + 4 * z0], c10 = grid[x0 + 1 + 4 * z0], c01 = grid[x0 + 4 * (z0 + 1)], c11 = grid[x0 + 1 + 4 * (z0 + 1)];
+        int out = 0;
+        for (int sh = 0; sh <= 16; sh += 8) {
+            float a = (c00 >> sh) & 0xFF, b = (c10 >> sh) & 0xFF, c = (c01 >> sh) & 0xFF, d = (c11 >> sh) & 0xFF;
+            float v = (a + (b - a) * tx) * (1 - tz) + (c + (d - c) * tx) * tz;
+            out |= Math.round(v) << sh;
+        }
+        return out;
     }
 
     /** Snapshot immuable, lisible depuis n'importe quel thread. */
     private record Snapshot(BlockMaterialTable mat, PalettedContainer<BlockState>[] states,
                             ChunkNibbleArray[] sky, ChunkNibbleArray[] blk, boolean[] belowWorld,
-                            boolean hasSky) implements VoxelSource {
+                            boolean hasSky, int[][] tints) implements VoxelSource {
 
         private static int which(int x, int y, int z) {
             if (x < 0) return 1; if (x > 15) return 2;
@@ -93,7 +143,11 @@ public final class McSnapshotSource implements SectionSnapshotSource {
         @Override public int albedo(int x, int y, int z) { return albedo(x, y, z, GsrLayout.FACE_SIDE); }
         @Override public int albedo(int x, int y, int z, int faceGroup) {
             int id = rawId(which(x, y, z), x, y, z);
-            return id < 0 ? 0 : mat.albedo(id, faceGroup);
+            if (id < 0) return 0;
+            int[] t = tints[mat.tintType(id)];
+            if (t == null) return mat.albedo(id, faceGroup);   // non teinté, ou voisin d'un type absent de la section
+            int cx = Math.max(0, Math.min(15, x)), cz = Math.max(0, Math.min(15, z));
+            return mat.albedo(id, faceGroup, t[cx + 16 * cz]);
         }
         @Override public int emission(int x, int y, int z) {
             int id = rawId(which(x, y, z), x, y, z);

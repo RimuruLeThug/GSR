@@ -102,6 +102,24 @@ public final class CoreSelfTest {
         check(GsrLayout.sectionKeyX(k) == -1234 && GsrLayout.sectionKeyY(k) == -4 && GsrLayout.sectionKeyZ(k) == 98765, "clé de section signée");
         check(GsrFrameData.BYTES == 208, "taille GsrFrame std430 = 208");
 
+        System.out.println("== Configuration (valeurs aberrantes de config/gsr.json)");
+        {
+            GsrConfig bad = new GsrConfig();
+            bad.levels = 9; bad.pagesY = 0; bad.baseOpacity = Float.NaN; bad.sigmaTangent = -1f;
+            bad.standaloneResolutionScale = 7; bad.capturesPerTick = 0; bad.maxTraceDistance = Float.NaN;
+            bad.validate();
+            check(bad.levels == GsrLayout.MAX_LEVELS && bad.pagesY == 2 && bad.baseOpacity == 0f && bad.sigmaTangent > 0f
+                    && bad.standaloneResolutionScale == 2 && bad.capturesPerTick == 1 && bad.maxTraceDistance > 0f,
+                    "validate() borne les valeurs aberrantes");
+            GsrConfig live = new GsrConfig(), file = new GsrConfig();
+            file.standaloneStrength = 0.5f;
+            boolean restart = live.copyRuntimeFrom(file);
+            file.pagesX = 16;
+            boolean restart2 = live.copyRuntimeFrom(file);
+            check(!restart && restart2 && live.standaloneStrength == 0.5f && live.pagesX == 8,
+                    "rechargement à chaud : champs structurels inchangés et signalés");
+        }
+
         System.out.println("== Budget / tri par cellule (damier 3D, pire cas)");
         {
             GsrConfig cfg = new GsrConfig();
