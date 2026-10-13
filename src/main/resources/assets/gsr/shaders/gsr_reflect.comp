@@ -4,6 +4,7 @@
 // =============================================================================================
 layout(local_size_x = 8, local_size_y = 8) in;
 
+#define GSR_COUNT_COST
 #include "gsr_common.glsl"
 #include "gsr_screen.glsl"
 
@@ -13,10 +14,11 @@ layout(rgba16f, binding = 0) writeonly uniform image2D uReflOut;
 layout(r8ui,    binding = 1) writeonly uniform uimage2D uReprOut;   // representative pixel, re-read by the temporal pass
 
 uniform float uMaxTrace;
-uniform int   uDebugView;   // 0 normal, 1 SSR only (sky fallback), 2 GSR only, 3 raw GSR, 4 GSR hit, 5 raw reflection
+uniform int   uDebugView;   // 0 normal, 1 SSR only (sky fallback), 2 GSR only, 3 raw GSR, 4 GSR hit, 5 raw reflection, 6 GSR cost
 
 const int SSR_STEPS  = 48;
 const int SSR_REFINE = 6;
+const int SSR_BATCH  = 4;
 
 /*
  * SSR: linear screen-space march with perspective-correct z interpolation
@@ -36,37 +38,50 @@ float ssrTrace(vec3 vp, vec3 rv, ivec2 px, out vec2 hitUV, out float hitDist) {
     int steps = clamp(int(length(s1 - s0) / 3.0), 8, SSR_STEPS);
     float jitter = gsrIGN(vec2(px), uFrame);
     float prevF = 0.0;
+    ivec2 maxPx = ivec2(uScreenSize) - 1;
 
-    for (int i = 1; i <= steps; i++) {
-        float f = (float(i) - 1.0 + jitter) / float(steps);
-        vec2 s = mix(s0, s1, f);
-        if (any(lessThan(s, vec2(0.0))) || any(greaterThanEqual(s, uScreenSize))) return 0.0;  // off-screen
-        float rayZ   = mix(vp.z * k0, ve.z * k1, f) / mix(k0, k1, f);
-        float sceneZ = gsrLinearViewZ(texelFetch(uDepth, ivec2(s), 0).r);
-        if (rayZ < sceneZ) {
-            // Refinement BEFORE the thickness test: a coarse step (up to ~20 px) on a slope seen at a
-            // grazing angle far exceeds the thickness, which made SSR miss clearly visible objects
-            // (reflected hill -> blurry GSR fallback). Only the gap at the refined point tells whether the
-            // ray really passes behind a silhouette.
-            float lo = prevF, hi = f;
-            for (int j = 0; j < SSR_REFINE; j++) {
-                float m = 0.5 * (lo + hi);
-                float rz = mix(vp.z * k0, ve.z * k1, m) / mix(k0, k1, m);
-                float sz = gsrLinearViewZ(texelFetch(uDepth, ivec2(mix(s0, s1, m)), 0).r);
-                if (rz < sz) hi = m; else lo = m;
-            }
-            float hz = mix(vp.z * k0, ve.z * k1, hi) / mix(k0, k1, hi);
-            float sz = gsrLinearViewZ(texelFetch(uDepth, ivec2(mix(s0, s1, hi)), 0).r);
-            if (sz - hz > max(0.3, -hz * 0.03)) return 0.0;   // passed BEHIND an object: information absent from the screen
-            hitUV = mix(s0, s1, hi) / uScreenSize;
-            vec3 hp = mix(vp * k0, ve * k1, hi) / mix(k0, k1, hi);
-            hitDist = length(hp - vp);
-            vec2 e = abs(hitUV * 2.0 - 1.0);
-            // Fade to GSR only over the ~2 % closest to the edge: GSR (one color per face)
-            // is blurry next to SSR, a 7.5 % band (0.85) showed up as a blurry reflection at the edge.
-            return 1.0 - smoothstep(0.96, 1.0, max(e.x, e.y));
+    // The march is bound by the latency of dependent depth reads: the depths of SSR_BATCH
+    // consecutive steps are fetched together, then tested in order (same samples, same result
+    // as one read per step; SSR 0.222 -> 0.200 ms, see docs/ARCHITECTURE.md §6).
+    for (int i0 = 1; i0 <= steps; i0 += SSR_BATCH) {
+        float depths[SSR_BATCH];
+        for (int b = 0; b < SSR_BATCH; b++) {
+            vec2 s = mix(s0, s1, (float(i0 + b) - 1.0 + jitter) / float(steps));
+            depths[b] = texelFetch(uDepth, clamp(ivec2(s), ivec2(0), maxPx), 0).r;
         }
-        prevF = f;
+        for (int b = 0; b < SSR_BATCH; b++) {
+            int i = i0 + b;
+            if (i > steps) return 0.0;
+            float f = (float(i) - 1.0 + jitter) / float(steps);
+            vec2 s = mix(s0, s1, f);
+            if (any(lessThan(s, vec2(0.0))) || any(greaterThanEqual(s, uScreenSize))) return 0.0;  // off-screen
+            float rayZ   = mix(vp.z * k0, ve.z * k1, f) / mix(k0, k1, f);
+            float sceneZ = gsrLinearViewZ(depths[b]);
+            if (rayZ < sceneZ) {
+                // Refinement BEFORE the thickness test: a coarse step (up to ~20 px) on a slope seen at a
+                // grazing angle far exceeds the thickness, which made SSR miss clearly visible objects
+                // (reflected hill -> blurry GSR fallback). Only the gap at the refined point tells whether the
+                // ray really passes behind a silhouette.
+                float lo = prevF, hi = f;
+                for (int j = 0; j < SSR_REFINE; j++) {
+                    float m = 0.5 * (lo + hi);
+                    float rz = mix(vp.z * k0, ve.z * k1, m) / mix(k0, k1, m);
+                    float sz = gsrLinearViewZ(texelFetch(uDepth, ivec2(mix(s0, s1, m)), 0).r);
+                    if (rz < sz) hi = m; else lo = m;
+                }
+                float hz = mix(vp.z * k0, ve.z * k1, hi) / mix(k0, k1, hi);
+                float sz = gsrLinearViewZ(texelFetch(uDepth, ivec2(mix(s0, s1, hi)), 0).r);
+                if (sz - hz > max(0.3, -hz * 0.03)) return 0.0;   // passed BEHIND an object: information absent from the screen
+                hitUV = mix(s0, s1, hi) / uScreenSize;
+                vec3 hp = mix(vp * k0, ve * k1, hi) / mix(k0, k1, hi);
+                hitDist = length(hp - vp);
+                vec2 e = abs(hitUV * 2.0 - 1.0);
+                // Fade to GSR only over the ~2 % closest to the edge: GSR (one color per face)
+                // is blurry next to SSR, a 7.5 % band (0.85) showed up as a blurry reflection at the edge.
+                return 1.0 - smoothstep(0.96, 1.0, max(e.x, e.y));
+            }
+            prevF = f;
+        }
     }
     return 0.0;
 }
@@ -119,6 +134,9 @@ void main() {
         dist = mix(gh.hitDist, ssrDist, conf);
         // "Hit" view: r = transmittance, g = distance / 16, b = (level + 1) / 4 (0 = nothing hit)
         if (uDebugView == 4) col = vec3(gh.transmittance, gh.hitDist / 16.0, float(gh.level + 1) / 4.0);
+        // "Cost" view: r = GSR steps / 64, g = splats read / 128, b = splats rejected as back-facing / 128
+        if (uDebugView == 6) col = vec3(float(gsrCostSteps) / 64.0, float(gsrCostSplats) / 128.0, float(gsrCostBack) / 128.0);
     }
+    if (uDebugView == 6 && conf >= 0.999) col = vec3(0.0);   // cost view: GSR not traced
     imageStore(uReflOut, lp, vec4(col, dist));
 }

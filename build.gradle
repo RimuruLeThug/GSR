@@ -47,6 +47,7 @@ tasks.named('runClient', JavaExec) {
     if (project.hasProperty('gsrMove')) systemProperty 'gsr.autoshotMove', project.property('gsrMove')
     if (project.hasProperty('gsrBursts')) systemProperty 'gsr.autoshotBursts', project.property('gsrBursts')
     if (project.hasProperty('gsrVideo')) systemProperty 'gsr.autoshotVideo', project.property('gsrVideo')
+    if (project.hasProperty('gsrBench')) systemProperty 'gsr.benchRepeat', project.property('gsrBench')
 }
 
 processResources {

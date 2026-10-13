@@ -314,6 +314,11 @@ public final class CoreSelfTest {
             h = gpu.trace(0, -1.5f, 0, 0, 0, 1, 0.05f, 20, 0, 0);
             check(h.transmittance > 0.99f && h.steps <= 6,
                     "empty bricks crossed without reading the cells (" + h.steps + " steps for 20 blocks, T=" + h.transmittance + ")");
+            // Same at y = 74: the whole octant y 72-79 (8³ voxels) is empty, crossed in one step per 8 blocks
+            // (bricks alone: 5 steps). Sky reflections spent most of their GPU steps in such zones.
+            h = gpu.trace(0, 3.5f, 0, 0, 0, 1, 0.05f, 20, 0, 0);
+            check(h.transmittance > 0.99f && h.steps <= 4,
+                    "empty octants crossed in 8-voxel steps (" + h.steps + " steps for 20 blocks, T=" + h.transmittance + ")");
 
             {   // The mask must only change the step count, never what is hit.
                 java.util.Random rnd = new java.util.Random(42);

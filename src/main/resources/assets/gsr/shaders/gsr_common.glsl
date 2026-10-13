@@ -182,6 +182,10 @@ struct GsrHit {
  * Within a cell the splats are composited without sorting (α-weighted mean, transmittance Π(1−α));
  * between cells the front -> back order is exact thanks to the DDA.
  */
+#ifdef GSR_COUNT_COST
+// Debug (cost view): steps, splats read, and splats rejected as back-facing by the last gsrTrace() call.
+int gsrCostSteps, gsrCostSplats, gsrCostBack;
+#endif
 GsrHit gsrTrace(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float coneBase) {
     GsrHit h;
     h.radiance = vec3(0.0); h.transmittance = 1.0; h.hitDist = tMax; h.level = -1;
@@ -193,7 +197,13 @@ GsrHit gsrTrace(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float c
     float hitW = 0.0, hitAcc = 0.0;
     float t = tMin;
 
+#ifdef GSR_COUNT_COST
+    gsrCostSteps = 0; gsrCostSplats = 0; gsrCostBack = 0;
+#endif
     for (int step = 0; step < GSR_MAX_STEPS && t < tMax; step++) {
+#ifdef GSR_COUNT_COST
+        gsrCostSteps++;
+#endif
         vec3  p  = ro + rd * t;
         float fp = coneBase + coneTan * t;
         int   L  = clamp(int(ceil(log2(max(fp, 1.0)))), 0, levels - 1);
@@ -218,10 +228,16 @@ GsrHit gsrTrace(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float c
         int   bi    = brick.x + 4 * (brick.y + 4 * brick.z);
         uint  bits  = bi < 32 ? meta.mask.x : meta.mask.y;
         bool  occupied = valid && (noMask || ((bits >> uint(bi & 31)) & 1u) != 0u);
+        // Octant of the page (2³ bricks = 8³ voxels) derived from the same mask: bricks
+        // x + 4y + 16z of the octant = bits 0x00330033 shifted by 2·ox + 8·oy, in the word of oz.
+        ivec3 oct = brick >> 1;
+        uint  octBits = (oct.z == 0 ? meta.mask.x : meta.mask.y) & (0x00330033u << uint(2 * oct.x + 8 * oct.y));
+        bool  octEmpty = valid && !noMask && !occupied && octBits == 0u;
 
-        // Box to cross: cell (occupied brick), empty brick (4³ voxels) or whole page.
-        ivec3 boxMin = occupied ? (page * 16 + cell * 2) * vs : valid ? (page * 16 + brick * 4) * vs : page * 16 * vs;
-        float boxSize = float(occupied ? 2 * vs : valid ? 4 * vs : 16 * vs);
+        // Box to cross: cell (occupied brick), empty octant (8³ voxels), empty brick (4³) or whole page.
+        ivec3 boxMin = occupied ? (page * 16 + cell * 2) * vs : octEmpty ? (page * 16 + oct * 8) * vs
+                     : valid ? (page * 16 + brick * 4) * vs : page * 16 * vs;
+        float boxSize = float(occupied ? 2 * vs : octEmpty ? 8 * vs : valid ? 4 * vs : 16 * vs);
         vec3  bmin = gsrToRel(boxMin);
         vec3  t0 = (bmin - ro) * invD, t1 = (bmin + boxSize - ro) * invD;
         vec3  tf = max(t0, t1);
@@ -240,8 +256,14 @@ GsrHit gsrTrace(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float c
                 uint  base = uint(slot) * maxSplats + off;
                 for (uint k = 0u; k < count; k++) {
                     GsrSplat s = gsrSplats[base + k];
+#ifdef GSR_COUNT_COST
+                    gsrCostSplats++;
+#endif
                     vec3  n  = gsrOctDecode(s.data.y);
                     float dn = dot(rd, n);
+#ifdef GSR_COUNT_COST
+                    if (dn >= 0.0) gsrCostBack++;
+#endif
                     if (dn >= 0.0) continue;                       // one-sided surfels
                     vec3  o  = ro - (pageOrigin + s.posSigmaT.xyz);
                     float st = s.posSigmaT.w, sn = uintBitsToFloat(s.data.z);

@@ -128,7 +128,7 @@ public final class GsrClient implements ClientModInitializer {
      * The player respawns where they disconnected: the view from a previous session can be found again.
      */
     private static final String AUTOSHOT = System.getProperty("gsr.autoshot");
-    private static final String[] AUTOSHOT_VIEWS = {"normal", "ssr", "gsr", "raw", "hit"};
+    private static final String[] AUTOSHOT_VIEWS = {"normal", "ssr", "gsr", "raw", "hit", "refl", "cost"};
     /**
      * Flicker bursts, after the views: per configuration, FLICKER_FRAMES screenshots one tick
      * apart, camera still. "off" (mod disabled) measures the vanilla water animation on its own.
@@ -199,6 +199,8 @@ public final class GsrClient implements ClientModInitializer {
         freezeCamera(client, Math.max(k, 0));
         if (k == -60) applyFlickerConfig(FLICKER_CONFIGS[c]);
         if (k >= 0) saveShot(client, AUTOSHOT + "_flicker_" + FLICKER_CONFIGS[c] + "_" + k);
+        // GPU time of each configuration (stabilized for 60 ticks): before/after measurements at the same spot
+        if (k == 0) LOG.info("GSR autoshot gpu [{}]: {}", FLICKER_CONFIGS[c], RENDERER.gpuLine());
     }
 
     /**
@@ -275,7 +277,7 @@ public final class GsrClient implements ClientModInitializer {
         CONFIG.standaloneEnabled = !w.contains("off");
         CONFIG.brickMask = !w.contains("nobricks");
         CONFIG.standaloneResolutionScale = w.contains("scale1") ? 1 : 2;
-        CONFIG.debugView = w.contains("gsronly") ? 2 : w.contains("refl") ? 5 : 0;
+        CONFIG.debugView = w.contains("gsronly") ? 2 : w.contains("ssronly") ? 1 : w.contains("cost") ? 6 : w.contains("refl") ? 5 : 0;
         if (baseRoughness < 0f) baseRoughness = CONFIG.standaloneRoughness;
         CONFIG.standaloneRoughness = w.contains("mirror") ? 0f : baseRoughness;
     }

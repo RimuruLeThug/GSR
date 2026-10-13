@@ -9,7 +9,7 @@ layout(binding = 0) uniform sampler2D uDepth;
 layout(binding = 2) uniform sampler2D uReflection;     // accumulated history (linear, low resolution)
 layout(binding = 4) uniform sampler2D uReflDist;       // camera distance of the representative pixel (1e9 = empty)
 layout(rgba8, binding = 0) uniform image2D uScene;     // main framebuffer (read/write)
-uniform int uDebugView;                                // 3: raw GSR (no Fresnel), 4: raw hit codes, 5: raw hybrid reflection
+uniform int uDebugView;                                // 3: raw GSR (no Fresnel), 4: raw hit codes, 5: raw hybrid reflection, 6: raw cost codes
 
 /*
  * Depth-guided upsampling: the 4 low-resolution texels around the pixel, weighted
@@ -80,6 +80,6 @@ void main() {
     vec3 sceneLin = pow(scene.rgb, vec3(2.2));
     vec3 outLin = sceneLin * (1.0 - spec) + reflC * spec;
     if (uDebugView == 3 || uDebugView == 5) outLin = reflC;
-    if (uDebugView == 4) { imageStore(uScene, px, vec4(refl.rgb, scene.a)); return; }
+    if (uDebugView == 4 || uDebugView == 6) { imageStore(uScene, px, vec4(refl.rgb, scene.a)); return; }
     imageStore(uScene, px, vec4(pow(outLin, vec3(1.0 / 2.2)), scene.a));
 }

@@ -47,6 +47,12 @@ public final class GsrRenderer {
     // Timing (/gsr stats): disjoint GPU sections + CPU time of uploads.
     static final int T_DEPTH = 0, T_REFLECT = 1, T_TEMPORAL = 2, T_COMPOSITE = 3;
     private static final String[] T_NAMES = {"depth copy", "reflection", "temporal", "composite"};
+    /**
+     * Development (-Dgsr.benchRepeat=N, gradle -PgsrBench=N): the reflection pass is dispatched N times per
+     * frame and its time divided by N. Keeps the GPU at its working clock (with vsync it idles and
+     * down-clocks, making sub-millisecond measurements noisy).
+     */
+    private static final int BENCH_REPEAT = Math.max(1, Integer.getInteger("gsr.benchRepeat", 1));
     private GsrGpuTimer timer;
     private double uploadCpuMs;
     private int lastUploads;
@@ -209,7 +215,7 @@ public final class GsrRenderer {
             glBindImageTexture(0, targets.reflection, 0, false, 0, GL_WRITE_ONLY, GL_RGBA16F);
             glBindImageTexture(1, targets.representative, 0, false, 0, GL_WRITE_ONLY, GL_R8UI);
             timer.begin(T_REFLECT);
-            glDispatchCompute(lgx, lgy, 1);
+            for (int r = 0; r < BENCH_REPEAT; r++) glDispatchCompute(lgx, lgy, 1);
             timer.end(T_REFLECT);
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 
@@ -265,15 +271,7 @@ public final class GsrRenderer {
     public void appendStats(java.util.List<String> out, GsrConfig cfg, boolean standalone) {
         if (failed) { out.add("Render: disabled (see the log)"); return; }
         if (!initialized) { out.add("Render: not initialized yet"); return; }
-        StringBuilder gpuLine = new StringBuilder("GPU (avg):");
-        double total = 0;
-        for (int s = 0; s < T_NAMES.length; s++) {
-            double ms = timer.avgMs(s);
-            total += ms;
-            gpuLine.append(String.format(" %s %.2f ms,", T_NAMES[s], ms));
-        }
-        gpuLine.append(String.format(" total %.2f ms", total));
-        out.add(standalone ? gpuLine.toString() : "GPU: service mode (shaderpack) or standalone off, passes not dispatched");
+        out.add(standalone ? gpuLine() : "GPU: service mode (shaderpack) or standalone off, passes not dispatched");
         out.add(String.format("Upload: %d pages in the last frame, CPU %.2f ms (avg)", lastUploads, uploadCpuMs));
         long ssbo = GsrFrameData.BYTES + (long) cfg.totalSlots() * (dev.gsr.core.GsrLayout.PAGE_META_BYTES
                 + dev.gsr.core.GsrLayout.CELLS_PER_PAGE * dev.gsr.core.GsrLayout.CELL_BYTES
@@ -281,6 +279,19 @@ public final class GsrRenderer {
         out.add(String.format("VRAM: SSBO %.1f MiB, screen targets %.1f MiB (%dx%d, reflection 1/%d)",
                 ssbo / 1048576.0, targets.bytes() / 1048576.0, Math.max(0, targets.width), Math.max(0, targets.height),
                 cfg.standaloneResolutionScale));
+    }
+
+    /** Average GPU time per pass and total (3 decimals: the passes are well under a millisecond). */
+    public String gpuLine() {
+        if (!initialized) return "GPU: not initialized";
+        StringBuilder line = new StringBuilder("GPU (avg):");
+        double total = 0;
+        for (int s = 0; s < T_NAMES.length; s++) {
+            double ms = timer.avgMs(s) / (s == T_REFLECT ? BENCH_REPEAT : 1);
+            total += ms;
+            line.append(String.format(" %s %.3f ms,", T_NAMES[s], ms));
+        }
+        return line.append(String.format(" total %.3f ms", total)).toString();
     }
 
     /** World change: the temporal history no longer makes sense. */

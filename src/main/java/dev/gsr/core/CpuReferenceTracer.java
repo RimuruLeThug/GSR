@@ -118,8 +118,13 @@ public final class CpuReferenceTracer implements GpuSink {
             int bi = brx + 4 * (bry + 4 * brz);
             int bits = bi < 32 ? meta[slot * 8 + 4] : meta[slot * 8 + 5];
             boolean occupied = valid && (ignoreBrickMask || ((bits >>> (bi & 31)) & 1) != 0);
+            // Octant of the page (2³ bricks = 8³ voxels): bits 0x00330033 << (2·otx + 8·oty) of the otz word.
+            int otx = brx >> 1, oty = bry >> 1, otz = brz >> 1;
+            int octBits = (otz == 0 ? meta[slot * 8 + 4] : meta[slot * 8 + 5]) & (0x00330033 << (2 * otx + 8 * oty));
+            boolean octEmpty = valid && !ignoreBrickMask && !occupied && octBits == 0;
             int mx, my, mz; float size;
             if (occupied) { mx = (pgx * 16 + cx * 2) * vs; my = (pgy * 16 + cy * 2) * vs; mz = (pgz * 16 + cz * 2) * vs; size = 2 * vs; }
+            else if (octEmpty) { mx = (pgx * 16 + otx * 8) * vs; my = (pgy * 16 + oty * 8) * vs; mz = (pgz * 16 + otz * 8) * vs; size = 8 * vs; }
             else if (valid) { mx = (pgx * 16 + brx * 4) * vs; my = (pgy * 16 + bry * 4) * vs; mz = (pgz * 16 + brz * 4) * vs; size = 4 * vs; }
             else { mx = pgx * 16 * vs; my = pgy * 16 * vs; mz = pgz * 16 * vs; size = 16 * vs; }
             float bminX = relX(mx), bminY = relY(my), bminZ = relZ(mz);
