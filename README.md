@@ -45,3 +45,11 @@ java -cp out dev.gsr.core.CoreSelfTest
 
 Les versions de `gradle.properties` (Yarn, Fabric API, Iris) sont à aligner sur
 https://fabricmc.net/develop avant la première compilation.
+
+## En jeu
+
+* `config/gsr.json` : créé au premier lancement avec toutes les valeurs par défaut ; `/gsr reload` le
+  relit (niveaux, pages, splats par page, liaisons SSBO et threads : au redémarrage).
+* `/gsr stats` : pages et splats par niveau, files, temps GPU par passe, VRAM, teinte du biome.
+* `/gsr debug normal|ssr|gsr`, `/gsr bricks on|off`, `/gsr scale 1|2` : diagnostic.
+* Compatibilité : `./gradlew runClient -PwithSodium` ou `-PwithIris` pour tester avec Sodium / Iris.

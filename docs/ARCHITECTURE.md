@@ -241,7 +241,27 @@ Le temporel ne gagne presque rien : la recherche du pixel représentatif (jusqu'
 normale par texel) compense la réduction du nombre de pixels. Si besoin, on peut écrire l'indice du
 représentant dans la passe reflet et le relire, au lieu de le recalculer.
 
-**Non vérifié** : mode « Fabuleux », Sodium, Iris, pilotes NVIDIA/Intel, nuit/pluie/Nether.
+**Vérifié le 2026-10-13 (2e session, captures automatiques `-PgsrCmds`, fenêtre 854×480)** :
+scintillement mesuré par `tools/FlickerDiff` (part des pixels d'eau dont l'amplitude dépasse 16/255,
+caméra figée) :
+
+| Configuration | Résultat | Mod coupé | Mod actif |
+|---|---|---|---|
+| Nuit (`time set 18000`) | eau légèrement assombrie, colline reflétée, pas de surbrillance | — | — |
+| Pluie | reflet du ciel gris, gouttes dessinées par-dessus | — | — |
+| Nether | changement de dimension propre, lave opaque non réfléchissante, 0,03 ms GPU | — | — |
+| Sodium 0.6.13 | reflets corrects, main et HUD intacts | 1,52 % | 0,40 % |
+| Iris 1.8.8 sans shaderpack | mode autonome, reflets corrects | 0,84 % | 0,37 % |
+| Iris 1.8.8 + Complementary Reimagined r5.9.3 | mode service (passes autonomes coupées), aucune exception | — | — |
+| Mode « Fabuleux » | reflets corrects (profondeur lue dans le framebuffer translucide) | 1,89 % | 0,64 % |
+
+Tests de compatibilité : `./gradlew runClient -PwithSodium` ou `-PwithIris` (Sodium + Iris + leurs
+bibliothèques jcpp / glsl-transformer / antlr, non chargées depuis le jar d'Iris en dev). Sodium 0.6.13
+exige Loom ≥ 1.8.9 : le projet est passé en Loom 1.8. Les erreurs `[MIXIN] Cannot resolve class
+org/lwjgl/glfw/GLFW` au démarrage viennent de la pré-vérification de Sodium en dev, sans conséquence.
+Le mode service n'est vérifié qu'en « ne plante pas » : aucun pack public n'appelle encore `gsrTrace()`.
+
+**Non vérifié** : pilotes NVIDIA/Intel, mode service avec un pack qui appelle réellement `gsrTrace()`.
 
 **Problèmes résolus (vérifiés par l'utilisateur le 2026-10-13, commit `c30a21b`)** : plus de
 scintillement de l'eau en marchant et en tournant la caméra, plus de nuage vert au ras de l'eau. Les
@@ -267,16 +287,30 @@ Historique du diagnostic :
 * Le gain de 0,81 → 0,13 ms vu avant la borne de LOD était faux (rayons qui rataient). La bonne
   mesure est 0,51 ms.
 
-**Étape en cours : teinte de biome** (pas commencée dans le code). Plan retenu :
-* La composition des quads est **linéaire en la teinte** : par face, couleur = A + B ⊙ teinte (A =
-  partie non teintée, B = coefficient des quads teintés). `BlockMaterialTable` stocke A et B par groupe
-  de faces, plus un type de teinte : aucune, herbe, feuillage ou eau. Le type se déduit en comparant
-  `BlockColors.getColor(state, null, null, i)` aux couleurs par défaut de `GrassColors` et
-  `FoliageColors`. Les teintes constantes (bouleau, épicéa, redstone) restent figées. Noms d'API à
-  vérifier dans le jar avant usage.
-* `McSnapshotSource` échantillonne `BiomeColors.getGrass/Foliage/WaterColor` sur le thread client.
-  Un échantillon par colonne 4×4 (résolution des biomes) sur −4..19, soit 6×6×3 lectures par section
-  et non 18×18. Le snapshot calcule ensuite A + B ⊙ teinte.
+**Teinte de biome (faite, 2026-10-13, vérifiée en jeu)** :
+* La composition des quads est **affine en la teinte** : par groupe de faces, couleur = A + B ⊙ teinte
+  / 255 (A = partie non teintée, B = texture des quads teintés). `BlockMaterialTable` stocke A, B et un
+  type de teinte (aucune, herbe, feuillage, eau). Le type se déduit en comparant
+  `BlockColors.getColor(state, null, null, i)` à `GrassColors/FoliageColors.getDefaultColor()`. Les
+  teintes constantes (bouleau, épicéa, redstone) sont figées dans A. L'eau (et les blocs immergés) :
+  A = 0, B = blanc. 9241 états teintés sur 26684 (surtout des variantes `waterlogged`).
+* `McSnapshotSource` lit `ClientWorld#getColor(pos, BiomeColors.GRASS/FOLIAGE/WATER_COLOR)` (déjà lissé
+  par le « biome blend ») au centre de chaque carré 4×4 de la section, à mi-hauteur, soit 16 lectures
+  par type, et seulement pour les types présents dans la palette de la section. Interpolation
+  bilinéaire par colonne ; les voisins de bordure prennent la colonne la plus proche. Le cœur n'a
+  pas changé : le snapshot renvoie directement l'albédo teinté, et les résumés L1–L3 en héritent.
+* Vérification : `/gsr stats` affiche la teinte sous le joueur et l'albédo du dessus d'un bloc
+  d'herbe. Au marécage (775, 2041) : herbe #677039, eau #617B64 → dessus d'herbe #3B4121 (plaine
+  #476D3E) ; la vue `/gsr debug gsr` y montre un reflet olive sombre.
+* Limites : canne à sucre (teinte `-1` sans monde) classée non teintée ; une seule hauteur par
+  section (biomes 3D des grottes approchés) ; la table n'est pas reconstruite après un changement de
+  pack de ressources (reconstruite au prochain lancement).
+
+**Configuration (faite)** : `config/gsr.json` lu au démarrage par `GsrConfigFile` (Gson), réécrit avec
+les champs manquants et les valeurs bornées par `GsrConfig#validate()` ; un fichier illisible est
+conservé et les valeurs par défaut utilisées. `/gsr reload` applique à chaud les champs de rendu et de
+budget ; niveaux, pages, splats/page, point de liaison SSBO et threads au prochain démarrage
+(`copyRuntimeFrom` le signale). σ et opacité ne s'appliquent qu'aux pages régénérées.
 
 Prochaines étapes, par ordre de rentabilité :
 1. ~~Reflet en **demi-résolution** + upsampling guidé par la profondeur~~ (fait : 3,04 → 1,24 ms).
@@ -300,9 +334,11 @@ Prochaines étapes, par ordre de rentabilité :
    **Pourquoi** : en jeu, le reflet GSR d'une colline (herbe = vert `MapColor` sur toutes les faces, ×2
    trop clair) formait un amas vert vif. Il ne se raccordait pas au SSR, d'où une bande verte qui
    suivait le bord de l'écran, là où le SSR passe la main. Vérifié par captures `/gsr debug gsr` avant/après.
-   Reste : teinte de biome par position (marécages, jungles…).
+   Teinte de biome par position : faite (voir plus haut).
    Outils de diagnostic : `/gsr debug normal|ssr|gsr`, `/gsr bricks on|off`, et
    `gradlew runClient -PgsrAutoshot=<préfixe>` (3 captures automatiques, une par vue, dans `run/screenshots`).
+   `-PgsrCmds="tp @s x y z;time set 18000|gsr stats"` envoie des commandes 5 s après l'entrée dans le
+   monde (et la partie après `|`, 13 s avant les captures, qui commencent alors à 45 s).
    Corrigés au passage : SSR, test d'épaisseur fait **après** le raffinement binaire (un pas grossier
    rejetait à tort des collines visibles) ; normale reconstruite, plus de voisin hors écran au bord.
 4. Mode autonome : le masque par profondeur (passe 0) ne distingue pas l'eau du verre teinté ni de la
