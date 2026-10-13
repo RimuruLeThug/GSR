@@ -231,6 +231,31 @@ public final class CoreSelfTest {
             check(pd.splatCount() == 12 && flagged == 6 && plain == 6,
                     "plante : 6 splats marqués sans ombrage, bloc opaque : 6 splats ombrés (" + flagged + "/" + plain + ")");
             check(GsrLayout.packSplatData(0xFFFF, 0xFF, 0xF, 3, false) >>> 30 == 0, "bit 30 libre sans le drapeau (niveau 3, tout à 1)");
+
+            // Bug des « cubes verts » : la face d'une plante était pleine jusqu'en haut, bords droits.
+            // Brins : pleins au pied, silhouette haute irrégulière, couverture moyenne ≈ 1 / TUFT_GAIN.
+            float[] side = {1, 0, 0}, up = {0, 1, 0};
+            float foot = 1f, top = 0f, mean = 0f;
+            int samples = 0;
+            java.util.Set<Float> heights = new java.util.HashSet<>();
+            for (int sp = 0; sp < 20; sp++) {
+                float px0 = 4.5f + sp, pz0 = 3.5f;
+                for (int i = 0; i < 40; i++) {
+                    float hz = -0.5f + (i + 0.5f) / 40f;
+                    foot = Math.min(foot, CpuReferenceTracer.tuft(0, -0.4f, hz, side, px0, 3.5f, pz0, 1f));
+                    top += CpuReferenceTracer.tuft(0, 0.45f, hz, side, px0, 3.5f, pz0, 1f) / 800f;
+                    for (int j = 0; j < 20; j++) { mean += CpuReferenceTracer.tuft(0, -0.5f + (j + 0.5f) / 20f, hz, side, px0, 3.5f, pz0, 1f); samples++; }
+                }
+                float hcut = 0f;   // hauteur du 1er brin : premier v où le masque passe sous 0,5
+                for (int j = 0; j < 100 && CpuReferenceTracer.tuft(0, -0.5f + j / 100f, -0.4f, side, px0, 3.5f, pz0, 1f) >= 0.5f; j++) hcut = j;
+                heights.add(hcut);
+            }
+            mean /= samples;
+            check(foot == 1f && top < 0.35f && heights.size() >= 5,
+                    String.format("plante : brins pleins au pied, haut clairsemé (%.2f), %d hauteurs distinctes sur 20", top, heights.size()));
+            check(Math.abs(mean * CpuReferenceTracer.TUFT_GAIN - 1f) < 0.15f,
+                    String.format("couverture moyenne des brins × gain ≈ 1 (%.2f)", mean * CpuReferenceTracer.TUFT_GAIN));
+            check(CpuReferenceTracer.tuft(0.3f, 0.45f, 0.3f, up, 1, 2, 3, 1f) == 1f, "faces dessus / dessous des plantes inchangées");
         }
 
         System.out.println("== Résumés de section");

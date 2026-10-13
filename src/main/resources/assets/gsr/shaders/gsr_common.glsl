@@ -30,6 +30,21 @@
 // Sans elle, le disque (opaque jusqu'à ~0,53 voxel du centre, encore ~55 % à 0,8) débordait de sa face :
 // le flanc immergé d'un bloc de rive masquait au-dessus de l'eau les touffes et talus (reflet marron).
 #define GSR_EDGE_SOFT 0.15
+// Plantes en croix (bit 30) : une face pleine se reflétait comme un cube vert translucide. Chaque face
+// latérale est découpée en GSR_TUFT_BLADES brins verticaux de hauteurs pseudo-aléatoires (fixes par
+// splat), pleins en bas et fondus en haut ; l'opacité est relevée de GSR_TUFT_GAIN pour garder en
+// moyenne la couverture de la texture. Miroir : CpuReferenceTracer#tuft.
+#define GSR_TUFT_BLADES 4.0
+#define GSR_TUFT_GAIN 1.7
+uint gsrHash(uint h) { h ^= h >> 16u; h *= 0x7feb352du; h ^= h >> 15u; h *= 0x846ca68bu; h ^= h >> 16u; return h; }
+float gsrTuft(vec3 q, vec3 n, vec3 pos, float vs) {
+    if (abs(n.y) > 0.5) return 1.0;                                // dessus / dessous : inchangés
+    float h01 = clamp((abs(n.x) > 0.5 ? q.z : q.x) / vs + 0.5, 0.0, 0.999);
+    float v01 = q.y / vs + 0.5;
+    uint seed = (floatBitsToUint(pos.x) * 73856093u) ^ (floatBitsToUint(pos.y) * 19349663u) ^ (floatBitsToUint(pos.z) * 83492791u);
+    float hgt = 0.45 + 0.55 * float(gsrHash(seed + uint(h01 * GSR_TUFT_BLADES)) >> 8u) / 16777216.0;
+    return 1.0 - smoothstep(hgt - 0.25, hgt, v01);
+}
 
 struct GsrFrame {
     ivec4 camBlock;                    // xyz bloc caméra, w index de frame
@@ -242,6 +257,10 @@ GsrHit gsrTrace(vec3 ro, vec3 rd, float tMin, float tMax, float coneTan, float c
                     vec3  qt = abs(q - n * dot(q, n));             // faces alignées sur les axes
                     float e  = max(qt.x, max(qt.y, qt.z));
                     float edge = 1.0 - smoothstep(0.5 * float(vs), (0.5 + GSR_EDGE_SOFT) * float(vs), e);
+                    if ((s.data.y & (1u << 30u)) != 0u) {
+                        col.a = min(1.0, col.a * GSR_TUFT_GAIN);
+                        edge *= gsrTuft(q, n, s.posSigmaT.xyz, float(vs));
+                    }
                     float alpha = min(col.a * min(1.0, GSR_ALPHA_GAIN * exp(-0.5 * max(m2, 0.0))), 0.99) * edge;
                     if (alpha < 1.0 / 255.0) continue;
                     sumA += alpha; keep *= 1.0 - alpha; sumT += alpha * ts;

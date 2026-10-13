@@ -171,12 +171,16 @@ public final class GsrClient implements ClientModInitializer {
         }
         // Vue i à 300 + 60·i ticks ; entre deux, 60 ticks pour que l'historique temporel se stabilise.
         int t = ++autoShotTicks - (AUTOSHOT_CMDS != null ? 900 : 300);   // téléportation : laisser générer
+        // Caméra figée dès 10 s avant les vues (après les commandes tardives) : la souris ou le clavier de
+        // l'utilisateur, fenêtre au premier plan, la faisaient dériver entre deux exécutions à comparer.
+        if (t >= -200 && t < 60 * AUTOSHOT_VIEWS.length) freezeCamera(client, 0);
         if (t < 0) return;
         if (client.currentScreen != null) client.setScreen(null);   // chat ou menu ouvert : masquerait l'eau
         if (t < 60 * AUTOSHOT_VIEWS.length) {
             if (t % 60 != 0) return;
             int i = t / 60;
             saveShot(client, AUTOSHOT + "_" + AUTOSHOT_VIEWS[i]);
+            if (i == 0) LOG.info("GSR autoshot : caméra tp @s {} {} {} {} {}", client.player.getX(), client.player.getY(), client.player.getZ(), client.player.getYaw(), client.player.getPitch());
             CONFIG.debugView = (i + 1) % AUTOSHOT_VIEWS.length;   // vue suivante ; normal après la dernière
             return;
         }

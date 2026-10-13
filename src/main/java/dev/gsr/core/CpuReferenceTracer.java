@@ -18,6 +18,19 @@ public final class CpuReferenceTracer implements GpuSink {
         float t = Math.max(0f, Math.min(1f, (x - e0) / (e1 - e0)));
         return t * t * (3f - 2f * t);
     }
+    /** = GSR_TUFT_BLADES, GSR_TUFT_GAIN : brins des plantes en croix (bit 30). */
+    public static final float TUFT_BLADES = 4f, TUFT_GAIN = 1.7f;
+    /** = gsrHash (uint GLSL = int Java, multiplications modulo 2^32). */
+    static int hash(int h) { h ^= h >>> 16; h *= 0x7feb352d; h ^= h >>> 15; h *= 0x846ca68b; h ^= h >>> 16; return h; }
+    /** = gsrTuft. */
+    static float tuft(float qx, float qy, float qz, float[] n, float px, float py, float pz, float vs) {
+        if (Math.abs(n[1]) > 0.5f) return 1f;
+        float h01 = Math.max(0f, Math.min(0.999f, (Math.abs(n[0]) > 0.5f ? qz : qx) / vs + 0.5f));
+        float v01 = qy / vs + 0.5f;
+        int seed = (Float.floatToRawIntBits(px) * 73856093) ^ (Float.floatToRawIntBits(py) * 19349663) ^ (Float.floatToRawIntBits(pz) * 83492791);
+        float hgt = 0.45f + 0.55f * (float) (hash(seed + (int) (h01 * TUFT_BLADES)) >>> 8) / 16777216f;
+        return 1f - smoothstep(hgt - 0.25f, hgt, v01);
+    }
     private final GsrConfig cfg;
     private final int[] meta;
     private final int[] cells;
@@ -147,6 +160,10 @@ public final class CpuReferenceTracer implements GpuSink {
                         float qn = qx * n[0] + qy * n[1] + qz * n[2];
                         float e = Math.max(Math.abs(qx - n[0] * qn), Math.max(Math.abs(qy - n[1] * qn), Math.abs(qz - n[2] * qn)));
                         float edge = 1f - smoothstep(0.5f * vs, (0.5f + EDGE_SOFT) * vs, e);
+                        if ((data & (1 << 30)) != 0) {
+                            opacity = Math.min(1f, opacity * TUFT_GAIN);
+                            edge *= tuft(qx, qy, qz, n, sx, sy, sz, vs);
+                        }
                         float alpha = Math.min(opacity * Math.min(1f, ALPHA_GAIN * (float) Math.exp(-0.5f * Math.max(m2, 0f))), 0.99f) * edge;
                         if (alpha < 1f / 255f) continue;
                         sumA += alpha; keep *= 1f - alpha; sumT += alpha * ts;

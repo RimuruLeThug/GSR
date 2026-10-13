@@ -315,6 +315,14 @@ l'utilisateur après le correctif ci-dessus) :
 * Testé à la résolution de l'utilisateur (fenêtre 2560×1369) ; les seuils du SSR et de l'upsampling sont en
   espace vue ou relatifs à la taille d'écran, la demi-résolution suit `uScreenSize`. Non testé à d'autres
   tailles de fenêtre.
+* *Herbes reflétées comme des cubes verts translucides* (capture utilisateur `claudemaisblock.png`). Un
+  voxel de plante était un voile uniforme sur toute sa face : sous une prairie, le repli GSR montrait des
+  cubes pâles aux bords droits. Les faces latérales des plantes (bit 30) sont maintenant découpées en 4 brins
+  verticaux de hauteurs pseudo-aléatoires (hachage de la position du splat, 0,45 à 1 voxel), pleins au pied
+  et fondus sur 0,25 voxel en haut ; opacité × 1,7 pour garder la couverture moyenne de la texture
+  (`gsrTuft`, miroir `CpuReferenceTracer#tuft`, 3 tests). Vérifié en A/B à la même position
+  (`tp @s 130.13 62.68 113.65 -119.4 15.3` dans « GSR Repro ») : cubes avant, silhouettes de touffes après.
+  L'autoshot fige maintenant la caméra pendant les vues (la souris de l'utilisateur la déplaçait).
 * Remarqué, non corrigé : la matrice de projection de Minecraft inclut le balancement de la vue en marchant,
   l'œil n'est donc pas exactement à l'origine de l'espace vue alors que les shaders prennent `normalize(P)`
   comme direction de vue (erreur ~1° près de la caméra). L'utilisateur ne voit pas de défaut en avançant.
