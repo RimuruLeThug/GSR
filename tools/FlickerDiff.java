@@ -12,8 +12,9 @@ import java.util.Arrays;
  */
 public class FlickerDiff {
     public static void main(String[] args) throws Exception {
-        if (args.length < 2) { System.err.println("au moins 2 images"); System.exit(1); }
-        String[] files = args.clone();
+        // Les cartes de chaleur des mesures précédentes correspondent au même glob : on les écarte.
+        String[] files = java.util.Arrays.stream(args).filter(a -> !a.endsWith("_heat.png")).toArray(String[]::new);
+        if (files.length < 2) { System.err.println("au moins 2 images"); System.exit(1); }
         Arrays.sort(files, (a, b) -> Integer.compare(index(a), index(b)));
         BufferedImage first = ImageIO.read(new File(files[0]));
         int w = first.getWidth(), h = first.getHeight(), n = w * h;

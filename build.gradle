@@ -7,6 +7,7 @@ group = 'dev.gsr'
 
 repositories {
     maven { url = 'https://api.modrinth.com/maven' }   // Iris (API seulement, optionnelle)
+    mavenCentral()
 }
 
 dependencies {
@@ -18,7 +19,13 @@ dependencies {
     modCompileOnly "maven.modrinth:iris:${project.iris_version}"
     // Compatibilité : ./gradlew runClient -PwithSodium ou -PwithIris (jamais embarqués dans le jar)
     if (project.hasProperty("withSodium") || project.hasProperty("withIris")) modLocalRuntime "maven.modrinth:sodium:${project.sodium_version}"
-    if (project.hasProperty("withIris")) modLocalRuntime "maven.modrinth:iris:${project.iris_runtime_version}"
+    if (project.hasProperty("withIris")) {
+        modLocalRuntime "maven.modrinth:iris:${project.iris_runtime_version}"
+        // Bibliothèques imbriquées dans le jar d'Iris, non chargées en environnement de dev
+        localRuntime "org.anarres:jcpp:1.4.14"
+        localRuntime "io.github.douira:glsl-transformer:2.0.1"
+        localRuntime "org.antlr:antlr4-runtime:4.13.1"
+    }
 }
 
 java {

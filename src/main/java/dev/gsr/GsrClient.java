@@ -130,6 +130,7 @@ public final class GsrClient implements ClientModInitializer {
 
     private static void autoShot(MinecraftClient client) {
         if (client.world == null || client.player == null) return;
+        client.options.pauseOnLostFocus = false;   // fenêtre en arrière-plan : pas de menu pause (non sauvegardé)
         if (AUTOSHOT_CMDS != null && (autoShotTicks == 100 || autoShotTicks == 640)) {
             String[] parts = AUTOSHOT_CMDS.split("\\|", 2);
             String part = autoShotTicks == 100 ? parts[0] : parts.length > 1 ? parts[1] : "";
