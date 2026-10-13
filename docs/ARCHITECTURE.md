@@ -222,14 +222,27 @@ Splats chargés : ≈ 60–80 k (L0), 120–160 k (L1), 100–115 k (L2), 15–1
 budget, si bien que la file ne se vidait jamais. Désormais seule une vraie copie consomme le budget
 (tentatives plafonnées à 64 × budget par tick). Test de non-régression dans `CoreSelfTest`.
 
-**Demi-résolution (2026-10-13)** : compile, tests du cœur OK, shaders compilés et monde chargé sans
-erreur sur RX 7800 XT. **Pas encore vérifié** : qualité visuelle (bords d'eau, silhouettes) et gain
-mesuré. À relever avec `/gsr stats` après `/gsr scale 1` puis `/gsr scale 2`, au même endroit.
+**Demi-résolution (2026-10-13), vérifiée en jeu** : pas de liseré aux bords de l'eau ni autour des
+silhouettes (constaté par l'utilisateur). Mesures `/gsr stats` au même endroit, face à l'eau
+(2560×1369, RX 7800 XT) :
+
+| Passe | `/gsr scale 1` | `/gsr scale 2` (défaut) |
+|---|---|---|
+| copie profondeur | 0,02 ms | 0,02 ms |
+| reflet (SSR + GSR) | 2,49 ms | **0,81 ms** |
+| temporel | 0,41 ms | 0,33 ms |
+| composition | 0,13 ms | 0,08 ms |
+| **total** | **3,04 ms** | **1,24 ms** (−59 %) |
+| cibles écran (VRAM) | 120,3 Mio | 40,1 Mio |
+
+Le temporel ne gagne presque rien : la recherche du pixel représentatif (jusqu'à 4 reconstructions de
+normale par texel) compense la réduction du nombre de pixels. Si besoin, on peut écrire l'indice du
+représentant dans la passe reflet et le relire, au lieu de le recalculer.
 
 **Non vérifié** : mode « Fabuleux », Sodium, Iris, pilotes NVIDIA/Intel, nuit/pluie/Nether.
 
 Prochaines étapes, par ordre de rentabilité :
-1. ~~Reflet en **demi-résolution** + upsampling guidé par la profondeur~~ (fait, mesures à relever).
+1. ~~Reflet en **demi-résolution** + upsampling guidé par la profondeur~~ (fait : 3,04 → 1,24 ms).
 2. **Masque d'occupation par page** (512 bits) pour sauter les cellules vides sans lire `cells[]`.
 3. Albédo depuis la **moyenne réelle des sprites** de l'atlas (au lieu de `MapColor`), teinte de biome.
 4. Mode autonome : le masque par profondeur (passe 0) ne distingue pas l'eau du verre teinté ni de la
