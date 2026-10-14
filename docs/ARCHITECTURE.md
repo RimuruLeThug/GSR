@@ -399,7 +399,7 @@ levels, pages, splats/page, SSBO binding point and threads at the next startup
 **Faster reflection pass (2026-10-14)**. Measurement method changed: with vsync the GPU is mostly idle
 and down-clocks, so sub-millisecond `GL_TIME_ELAPSED` values varied by ±0.05 ms between runs.
 `-PgsrBench=N` dispatches the reflection pass N times per frame and divides its time by N (GPU kept at its
-working clock, ±0.003 ms). `run/devtools/perf.sh` (not versioned) replays the reference spot at 2560×1369 and
+working clock; bursts of the same run agree to ~0.003 ms, but separate runs of the same configuration can differ by several percent, e.g. SSR only 0.254 vs 0.237 ms). `run/devtools/perf.sh` (not versioned) replays the reference spot at 2560×1369 and
 logs the time of each burst configuration (`GSR autoshot gpu [...]`). Reflection pass, bench ×16:
 
 | Step | SSR only | default (SSR → GSR) | GSR only |
@@ -438,6 +438,20 @@ Same spot, bench ×16, reflection pass:
 
 On this GPU, below half resolution the pass is bound by the latency of the longest rays, not by the
 texel count (quarter ≈ third). On a smaller GPU the throughput (old figures) is the better guide.
+
+**Bench extended and CPU statistics (2026-10-14, Windows 11, RX 7800 XT, 2560×1369, reference position)**:
+* `-PgsrBench=N` now repeats the reflection, temporal and composite passes (the extra composite repeats write a
+  full-resolution scratch target, since the composite blends into the scene and is not idempotent). The repeats are
+  separated by a barrier; `-PgsrBenchOverlap` removes it and restores the throughput-style measurement.
+* Throughput bench (`-PgsrBench=16 -PgsrBenchOverlap`), from `GSR autoshot gpu` logs. Half resolution: depth copy
+  0.020, reflection 0.400 (SSR part 0.208), temporal 0.033, composite 0.075, total 0.529 ms. Quarter resolution:
+  reflection 0.144 (SSR 0.118), temporal 0.011, composite 0.074, total 0.248 ms. The composite runs at full
+  resolution whatever the scale, so it is about 1/3 of the total at scale 4.
+* `/gsr stats` has a new `CPU:` line: client tick average and maximum since the previous call, worker job count and
+  ms per job. The log prints `GSR: clipmap built in X s (jobs, worker CPU, worker threads)` once the clipmap has
+  been filled after entering a world.
+* Measured: clipmap built in 15.8 s with 1 and with 4 workers (limited by `capturesPerTick` = 48, not by the
+  workers); client tick max 0.54-1.09 ms over three runs; 0.44 ms/job with 1 worker, 0.97-0.99 ms/job with 4.
 
 **Tried without gain: compaction of the GSR rays** (patch kept outside the repository). Pass 1a = SSR only, appending
 the texels left to GSR to an SSBO list (one atomic per 8×8 group); a 1×1×1 pass writes the arguments of

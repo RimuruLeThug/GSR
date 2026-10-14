@@ -79,7 +79,7 @@ macOS is **not supported**, because it does not offer OpenGL 4.3.
 
 | Command | Effect |
 |---|---|
-| `/gsr stats` | Pages and splats per level, queues, GPU time per pass, VRAM, biome tint |
+| `/gsr stats` | Pages and splats per level, queues, GPU time per pass, CPU line (client tick average/max, worker jobs and ms/job), VRAM, biome tint |
 | `/gsr debug normal\|ssr\|gsr\|raw\|hit\|refl\|cost` | Diagnostic views: normal rendering, SSR only, GSR only, GSR without Fresnel, hits, final hybrid reflection, GSR cost (steps / splats per ray) |
 | `/gsr scale 1\|2\|3\|4` | Reflection resolution: 1 = full, 2 = half (default), 3 = third, 4 = quarter |
 | `/gsr bricks on\|off` | Enables or disables the per-brick occupancy mask (diagnostic) |
@@ -137,6 +137,8 @@ javac -d out src/main/java/dev/gsr/core/*.java src/test/java/dev/gsr/core/*.java
 - `examples/gsr-testpack`: minimal Iris pack that reflects water through `gsrTrace()` only.
 
 ## Credits
+
+Some changes in this repository are produced and reviewed autonomously by AI agents and are not necessarily tested in game by Rimuru, unless stated otherwise.
 
 All the code of this mod was written by Claude (Anthropic), an AI agent, under the direction and with the review of Rimuru, who tested it in game and validated each step. The original idea for GSR came from Garloulou.
 
