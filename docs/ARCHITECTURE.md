@@ -184,7 +184,12 @@ linear, `rgba8` written into the main framebuffer **before** the hand and the HU
   context and AMD drivers then report exactly "3.2" (seen in game: `3.2.0 Core Profile
   Context` on RX 7800 XT, GLSL 4.60), so `GLCapabilities.OpenGL43` is false. We also accept
   `ARB_compute_shader + ARB_shader_storage_buffer_object + ARB_shader_image_load_store +
-  ARB_texture_storage` with GLSL ≥ 4.30 (LWJGL shares function pointers between core/ARB).
+  ARB_texture_storage (+ ARB_timer_query)` (LWJGL shares function pointers between core/ARB).
+  The advertised GLSL version is **not** checked: NVIDIA reports `3.2.0 NVIDIA` with
+  `GLSL 1.50 NVIDIA via Cg compiler` in this context (user report, GTX 1650 SUPER, driver 616.92,
+  which a GLSL ≥ 4.30 gate wrongly disabled) while its compiler accepts `#version 430 core`.
+  The shaders are compiled before the SSBOs are allocated, so a driver that really cannot compile
+  them disables GSR cleanly without leaking GPU memory. Not yet confirmed on an NVIDIA machine.
 
 ## 6. State and roadmap
 

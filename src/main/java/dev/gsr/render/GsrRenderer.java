@@ -82,40 +82,44 @@ public final class GsrRenderer {
         }
         GsrClient.LOG.info("GSR: context {}", glInfo);
         try {
-            gpu = new GsrGpuResources(cfg);
+            // Shaders first: on drivers that under-report their GLSL version the compile is the real
+            // capability test, and failing it must not leave the large SSBOs allocated.
             progDepthCopy = GsrShaderLoader.compileCompute("gsr_depthcopy.comp", cfg.ssboBindingBase);
             progReflect = GsrShaderLoader.compileCompute("gsr_reflect.comp", cfg.ssboBindingBase);
             progTemporal = GsrShaderLoader.compileCompute("gsr_temporal.comp", cfg.ssboBindingBase);
             progComposite = GsrShaderLoader.compileCompute("gsr_composite.comp", cfg.ssboBindingBase);
+            gpu = new GsrGpuResources(cfg);
             timer = new GsrGpuTimer(T_NAMES.length);
             initialized = true;
         } catch (RuntimeException e) {
             failed = true;
+            glDeleteProgram(progDepthCopy); glDeleteProgram(progReflect); glDeleteProgram(progTemporal); glDeleteProgram(progComposite);
+            progDepthCopy = progReflect = progTemporal = progComposite = 0;
+            if (gpu != null) { gpu.close(); gpu = null; }
             GsrClient.LOG.error("GSR disabled: GPU initialization failed", e);
         }
         return initialized;
     }
 
     /**
-     * Minecraft requests a 3.2 Core context. Some drivers (AMD in particular) then report exactly
-     * "3.2" even though the hardware handles 4.6: OpenGL43 is false, but the functions are exposed via the
-     * ARB extensions (LWJGL shares core/ARB pointers). So we accept either one.
+     * Minecraft requests a 3.2 Core context and some drivers honour it literally: AMD reports "3.2"
+     * (GLSL 4.60), NVIDIA reports "3.2.0 NVIDIA" with "GLSL 1.50 NVIDIA via Cg compiler". OpenGL43 is
+     * then false, but the 4.3 entry points are exposed through the ARB extensions (LWJGL shares the
+     * core/ARB pointers) and NVIDIA's compiler still accepts "#version 430 core". So the extensions
+     * decide here, not the advertised GLSL version: the real compile in ensureInit() is the final
+     * test and disables GSR cleanly if it fails.
      */
     private static boolean supportsGl43Features() {
         GLCapabilities c = GL.getCapabilities();
         if (c.OpenGL43) return true;
         boolean ext = c.GL_ARB_compute_shader && c.GL_ARB_shader_storage_buffer_object
-                && c.GL_ARB_shader_image_load_store && c.GL_ARB_texture_storage;
-        if (!ext) return false;
-        // The source uses "#version 430 core": a GLSL compiler >= 4.30 is required.
-        String glsl = glGetString(GL_SHADING_LANGUAGE_VERSION);
-        try {
-            String[] v = glsl.trim().split("[ .]");
-            int major = Integer.parseInt(v[0]), minor = Integer.parseInt(v[1]);
-            return major > 4 || (major == 4 && minor >= 30);
-        } catch (RuntimeException e) {
-            return false;
+                && c.GL_ARB_shader_image_load_store && c.GL_ARB_texture_storage
+                && (c.OpenGL33 || c.GL_ARB_timer_query);
+        if (ext) {
+            GsrClient.LOG.info("GSR: OpenGL 4.3 features through ARB extensions (context {}, advertised GLSL {})",
+                    glGetString(GL_VERSION), glGetString(GL_SHADING_LANGUAGE_VERSION));
         }
+        return ext;
     }
 
     // ------------------------------------------------------------------ start of frame
