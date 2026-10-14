@@ -37,6 +37,7 @@ All of this was tested on Windows 11, with an RX 7800 XT and an AMD driver.
 **Not verified**
 
 - **NVIDIA** and **Intel** drivers.
+- The first-launch GPU classifier on Intel, NVIDIA, AMD integrated GPUs and software renderers (covered by unit tests only), a real fresh install classified as Low, the Low preset's performance on a modest GPU, and the "pick Low in the screen, then restart" chain.
 - Public shaderpacks. Complementary Reimagined and Unbound r5.9.3 were tested with Iris 1.8.8: they load normally and GSR switches to service mode, but they **do not call `gsrTrace()`**. **With these packs, GSR therefore brings no visible change**: their reflections remain their own. Integration is up to their authors. See [`docs/IRIS_INTEGRATION.md`](docs/IRIS_INTEGRATION.md).
 - Window sizes other than 2560×1369, for threshold tuning.
 
@@ -47,7 +48,7 @@ macOS is **not supported**, because it does not offer OpenGL 4.3.
 1. Install [Fabric Loader](https://fabricmc.net/use/) for Minecraft 1.21.1.
 2. Put **Fabric API** in the `mods/` folder.
 3. Put the GSR jar (`gsr-<version>.jar`, *Releases* tab) in `mods/`. Sodium and Iris are optional.
-4. Launch the game. The `config/gsr.json` file is created on first launch.
+4. Launch the game. The `config/gsr.json` file is created on first launch. Only in that case, GSR reads the GPU (vendor, renderer, free video memory) and picks a quality preset (see below). An existing `config/gsr.json` is never changed, apart from a `gpuDetectionDone` flag added to it.
 
 **OpenGL 4.3 is required.** If your machine does not provide it, the mod disables itself cleanly with a message in the log, without crashing. Detection also accepts drivers that report a 3.2 context but expose the required ARB extensions (the case with AMD drivers).
 
@@ -58,12 +59,26 @@ macOS is **not supported**, because it does not offer OpenGL 4.3.
 | Setting | Effect |
 |---|---|
 | Reflections | On / off |
+| Preset | Low, Medium, High, Ultra, or Custom when the current values match none (see below) |
 | Resolution | Full, Half (default), Third, Quarter: lower is faster and blurrier |
 | Strength | Reflections on water and translucent blocks (100% = physical Fresnel) |
 | Opaque Floors | Reflections on upward-facing opaque blocks (0% by default) |
 | Roughness | 0% = mirror (default); higher values blur the reflection |
 | Trace Distance | Maximum length of an off-screen reflection ray (64–512 blocks) |
 | Debug View, Statistics, Brick Mask | Diagnostics (not saved) |
+
+**Presets.** A preset sets the reflection resolution, the splats per page and the uploads per frame:
+
+| Preset | Resolution | Splats per page | Uploads per frame |
+|---|---|---|---|
+| Low | Quarter | 1024 | 16 |
+| Medium | Third | 2048 | 32 |
+| High (= previous defaults) | Half | 2048 | 32 |
+| Ultra | Full | 2048 | 32 |
+
+On the very first launch (no `config/gsr.json` yet), the preset is chosen from the GPU: Low for Intel (except discrete Arc), AMD integrated GPUs, GeForce MX/GT and cards with under 1 GiB of video memory; Medium under 3 GiB; High otherwise; GSR left disabled for software renderers. Ultra is never selected automatically. The splats per page cannot change while the game runs: picking a preset in the screen shows "restart to finish" and that value applies at the next startup (the other fields apply immediately). Known limitation: after picking a preset in the screen, `/gsr reload` followed by a save can overwrite a hand-edited `maxSplatsPerPage` with the pending preset value.
+
+Verified on 2026-10-14 (Windows 11, RX 7800 XT): a fresh install logs `GSR: GPU "ATI Technologies Inc." / "AMD Radeon RX 7800 XT" (15293 MiB free) -> preset HIGH`; an existing `gsr.json` was kept unchanged except for `gpuDetectionDone`; the Preset row was seen in the settings screen (High, Low with "restart to finish", Medium/Custom/Ultra with F8). With 1024 splats per page at half resolution, the splat SSBO goes from 66.0 to 34.0 MiB and the splats per level from 89k/176k/106k/18k to 88k/163k/93k/17k; GPU time was unchanged on this GPU and no difference was visible at the reference spot.
 
 **Keys** (rebindable in *Options > Controls > Key Binds*, "GSR Reflections" category):
 
@@ -79,13 +94,13 @@ macOS is **not supported**, because it does not offer OpenGL 4.3.
 
 | Command | Effect |
 |---|---|
-| `/gsr stats` | Pages and splats per level, queues, GPU time per pass, CPU line (client tick average/max, worker jobs and ms/job), VRAM, biome tint |
+| `/gsr stats` | Pages and splats per level, queues, GPU time per pass, CPU line (client tick average/max with 3 decimals, worker jobs and ms/job), VRAM, biome tint |
 | `/gsr debug normal\|ssr\|gsr\|raw\|hit\|refl\|cost` | Diagnostic views: normal rendering, SSR only, GSR only, GSR without Fresnel, hits, final hybrid reflection, GSR cost (steps / splats per ray) |
 | `/gsr scale 1\|2\|3\|4` | Reflection resolution: 1 = full, 2 = half (default), 3 = third, 4 = quarter |
 | `/gsr bricks on\|off` | Enables or disables the per-brick occupancy mask (diagnostic) |
 | `/gsr reload` | Re-reads `config/gsr.json` |
 
-**`config/gsr.json`** is created with all default values. Missing fields are rewritten and values are clamped. An unreadable file is kept as is and the default values are used. `/gsr reload` applies the rendering and budget fields live. The number of levels, the pages, the number of splats per page, the SSBO binding point and the threads require a restart.
+**`config/gsr.json`** is created with all default values (or the preset chosen for your GPU on first launch). Missing fields are rewritten and values are clamped. An unreadable file is kept as is and the default values are used. `/gsr reload` applies the rendering and budget fields live. The number of levels, the pages, the number of splats per page, the SSBO binding point and the threads require a restart.
 
 ## Measured performance
 
@@ -100,7 +115,7 @@ macOS is **not supported**, because it does not offer OpenGL 4.3.
 
 - Screen targets go from 120 MiB (full resolution) to about 40 MiB (half resolution).
 - Reflection pass alone (2026-10-14, GPU kept at full clock): 1.45 ms at full resolution, 0.39 ms at half, 0.19 ms at a third, 0.14 ms at a quarter.
-- The Gaussian field takes about 64 MiB of VRAM by default (1024 pages).
+- The Gaussian field takes about 64 MiB of VRAM by default (1024 pages), about 32 MiB with the Low preset (1024 splats per page).
 
 These figures come from a single machine. They say nothing about other GPUs.
 
@@ -108,7 +123,7 @@ These figures come from a single machine. They say nothing about other GPUs.
 
 ```bash
 ./gradlew build          # produces build/libs/gsr-<version>.jar
-./gradlew coreSelfTest   # core tests, without Minecraft (43 checks)
+./gradlew coreSelfTest   # core tests, without Minecraft (52 checks)
 ./gradlew runClient      # launches the game with the mod
 ./gradlew runClient -PwithSodium   # or -PwithIris, to test compatibility
 ./gradlew gsrTestPack    # assembles the test Iris pack in run/shaderpacks/GSR-TestPack

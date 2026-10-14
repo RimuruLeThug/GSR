@@ -188,7 +188,7 @@ linear, `rgba8` written into the main framebuffer **before** the hand and the HU
 
 ## 6. State and roadmap
 
-**Verified**: all of `dev.gsr.core` compiles and passes 43 checks (`CoreSelfTest`, including stats, the capture queue, the brick mask and the octant skip): std430 format, signed section
+**Verified**: all of `dev.gsr.core` compiles and passes 52 checks (`CoreSelfTest`, including stats, the capture queue, the brick mask and the octant skip): std430 format, signed section
 key, budget and per-cell sort, summaries, and — via `CpuReferenceTracer`, the line-by-line mirror
 of `gsrTrace()` on the same bytes — hits on the ground (L0), on a pillar outside the L0 window (found in
 L1), in translucent water, in a rough cone, after block destruction and after toroidal recentering.
@@ -395,6 +395,26 @@ the missing fields and the values clamped by `GsrConfig#validate()`; an unreadab
 kept and the default values used. `/gsr reload` applies the rendering and budget fields live;
 levels, pages, splats/page, SSBO binding point and threads at the next startup
 (`copyRuntimeFrom` reports it). σ and opacity only apply to regenerated pages.
+
+**Quality presets (2026-10-14)**. `core/GsrPreset` (no Minecraft dependency) holds LOW (scale 4, 1024 splats/page,
+16 uploads/frame), MEDIUM (3, 2048, 32), HIGH (2, 2048, 32 = the `GsrConfig` defaults), ULTRA (1, 2048, 32) and a
+non-selectable OFF (LOW values, standalone mode disabled; returned for software renderers). `classify(vendor, renderer,
+vramMiB)` maps GL_VENDOR/GL_RENDERER and dedicated VRAM (`render/GsrGpuInfo`, read at `CLIENT_STARTED`: NVX dedicated
+memory or ATI free memory) to a preset: software renderer -> OFF; Intel -> LOW (discrete Arc -> HIGH); AMD APU, GeForce
+MX/GT -> LOW; VRAM < 1 GiB -> LOW, < 3 GiB -> MEDIUM; else HIGH. ULTRA is never chosen automatically. The preset is
+applied only when `config/gsr.json` did not exist; otherwise the file is kept and only the persisted `gpuDetectionDone`
+field is added. The settings screen has a Preset row derived from the current values ("Custom" if none matches) and is
+rebuilt after a preset or resolution change. `maxSplatsPerPage` is structural (SSBO slabs): the screen writes it to the
+file for the next startup ("restart to finish"). Known limitation: after picking a preset, `/gsr reload` + save can
+overwrite a hand-edited `maxSplatsPerPage` with the pending value. The client tick now uses
+`GaussianChunkManager.totalUploads()` instead of `stats()`, so the `/gsr stats` CPU max is no longer reset every tick
+(printed with 3 decimals).
+Verified (Windows 11, RX 7800 XT): fresh install classified HIGH (`GPU "ATI Technologies Inc." / "AMD Radeon RX 7800 XT"
+(15293 MiB free) -> preset HIGH`), existing config kept except `gpuDetectionDone`, Preset row seen in the screen. 1024
+splats/page at half resolution: splat SSBO 66.0 -> 34.0 MiB, splats per level 89k/176k/106k/18k -> 88k/163k/93k/17k,
+GPU time unchanged on this GPU, no visible difference at the reference spot. **Not verified**: the classifier on
+Intel/NVIDIA/AMD iGPU/software renderers (unit tests only), a real fresh install classified LOW, the LOW preset's
+performance on a modest GPU, the pick-LOW-in-screen then restart chain.
 
 **Faster reflection pass (2026-10-14)**. Measurement method changed: with vsync the GPU is mostly idle
 and down-clocks, so sub-millisecond `GL_TIME_ELAPSED` values varied by ±0.05 ms between runs.
