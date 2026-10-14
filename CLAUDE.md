@@ -118,7 +118,7 @@ In order:
   dead code, rewrite a shader. Touch nothing outside it (except the Gradle/Loom caches,
   which the tools manage themselves).
 - If the folder is a git repository, make small, descriptive commits after each step that compiles.
-  Never push to a remote repository unless asked.
+  You may commit and push to origin/master on your own, but only through the validated workflow described in the multi-agent mission (build + coreSelfTest green, reviewer verdict ACCEPT). Never force-push, never rewrite history.
 - Keep `docs/ARCHITECTURE.md` up to date when an architecture choice changes, and update the
   "State and roadmap" section with what is verified and what is not.
 - Add a test in `CoreSelfTest` for every bug fixed in `core/`.

@@ -22,9 +22,6 @@
       "Bash(unzip:*)",
       "Bash(tail:*)",
       "Bash(cat:*)"
-    ],
-    "deny": [
-      "Bash(git push:*)"
     ]
   }
 }

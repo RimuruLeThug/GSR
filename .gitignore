@@ -7,3 +7,6 @@ run/
 gsr-mod.zip
 dist/
 run/gsr-run.txt
+.claude/orchestration/
+.claude/worktrees/
+.claude/agents/
