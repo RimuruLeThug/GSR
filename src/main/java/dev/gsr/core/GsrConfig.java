@@ -52,6 +52,12 @@ public final class GsrConfig {
     /** Max distance (blocks) of a GSR ray. */
     public float maxTraceDistance = 384f;
 
+    /**
+     * Set once the GPU has been detected on the first launch (GsrClient, CLIENT_STARTED). A preset is applied
+     * only when config/gsr.json did not exist; an existing file only gets this flag, its values are kept.
+     */
+    public boolean gpuDetectionDone = false;
+
     /** Largest standaloneResolutionScale (the representative pixel index is stored on 8 bits: scale² ≤ 256). */
     public static final int MAX_RESOLUTION_SCALE = 4;
 
@@ -102,6 +108,15 @@ public final class GsrConfig {
     /** NaN -> lower bound. */
     private static float clampF(float v, float lo, float hi) { return v >= lo ? Math.min(hi, v) : lo; }
 
+    /** Independent copy of every persisted field (debug fields keep their defaults). */
+    public GsrConfig copy() {
+        GsrConfig c = new GsrConfig();
+        c.copyRuntimeFrom(this);
+        c.levels = levels; c.pagesX = pagesX; c.pagesY = pagesY; c.pagesZ = pagesZ;
+        c.maxSplatsPerPage = maxSplatsPerPage; c.ssboBindingBase = ssboBindingBase; c.workerThreads = workerThreads;
+        return c;
+    }
+
     /**
      * Hot reload: copies the fields that can change during a session. Fields that fix the
      * SSBO size, binding points or threads only change on restart.
@@ -114,6 +129,7 @@ public final class GsrConfig {
         standaloneEnabled = o.standaloneEnabled; standaloneRoughness = o.standaloneRoughness;
         standaloneStrength = o.standaloneStrength; standaloneFloorStrength = o.standaloneFloorStrength;
         standaloneResolutionScale = o.standaloneResolutionScale; maxTraceDistance = o.maxTraceDistance;
+        gpuDetectionDone = o.gpuDetectionDone;
         return levels != o.levels || pagesX != o.pagesX || pagesY != o.pagesY || pagesZ != o.pagesZ
                 || maxSplatsPerPage != o.maxSplatsPerPage || ssboBindingBase != o.ssboBindingBase
                 || workerThreads != o.workerThreads;

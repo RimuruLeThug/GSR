@@ -6,8 +6,10 @@ import dev.gsr.compat.IrisCompat;
 import dev.gsr.core.GaussianChunkManager;
 import dev.gsr.core.GsrConfig;
 import dev.gsr.core.GsrLayout;
+import dev.gsr.core.GsrPreset;
 import dev.gsr.mc.BlockMaterialTable;
 import dev.gsr.mc.McSnapshotSource;
+import dev.gsr.render.GsrGpuInfo;
 import dev.gsr.render.GsrRenderer;
 import dev.gsr.ui.GsrKeys;
 import dev.gsr.ui.GsrOptionsScreen;
@@ -17,6 +19,7 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -60,6 +63,8 @@ public final class GsrClient implements ClientModInitializer {
     public static final Logger LOG = LoggerFactory.getLogger("gsr");
 
     private static final java.nio.file.Path CONFIG_FILE = FabricLoader.getInstance().getConfigDir().resolve("gsr.json");
+    /** No config file before this launch (evaluated before CONFIG, whose loading writes the file). */
+    private static final boolean FRESH_CONFIG = !java.nio.file.Files.exists(CONFIG_FILE);
     private static final GsrConfig CONFIG = GsrConfigFile.load(CONFIG_FILE);
     private static final GsrRenderer RENDERER = new GsrRenderer();
     private static BlockMaterialTable materials;
@@ -69,6 +74,7 @@ public final class GsrClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        ClientLifecycleEvents.CLIENT_STARTED.register(GsrClient::detectGpu);
         ClientTickEvents.END_CLIENT_TICK.register(GsrClient::tick);
         GsrKeys.register();
         ClientTickEvents.END_CLIENT_TICK.register(GsrKeys::tick);
@@ -301,8 +307,9 @@ public final class GsrClient implements ClientModInitializer {
 
     /**
      * Development: -Dgsr.uiTest=<prefix> (gradle -PgsrUiTest=<prefix>) scripts the settings UI with no
-     * intervention: Video Settings scrolled to the GSR entry, the GSR screen, then the keys (F9 overlay,
-     * F8 resolution 3 and 4, F7 cost view), one screenshot each in run/screenshots/<prefix>_ui_*.png.
+     * intervention: Video Settings scrolled to the GSR entry, the GSR screen (Preset row cycled to Low and back to
+     * High), then the keys (F9 overlay, F8 resolution 3 and 4, F7 cost view), one screenshot each in
+     * run/screenshots/<prefix>_ui_*.png; the preset after each step is logged ("GSR ui test: ...").
      * Ends with the resolution back to 2 and the debug view off.
      */
     private static final String UI_TEST = System.getProperty("gsr.uiTest");
@@ -319,12 +326,19 @@ public final class GsrClient implements ClientModInitializer {
             for (var child : client.currentScreen.children()) if (child instanceof OptionListWidget list) list.setScrollAmount(list.getMaxScroll());
         if (t == 330) saveShot(client, UI_TEST + "_ui_video");
         if (t == 340) client.setScreen(new GsrOptionsScreen(null));
-        if (t == 370) saveShot(client, UI_TEST + "_ui_gsr");
+        if (t == 370) { saveShot(client, UI_TEST + "_ui_gsr"); logPreset("settings screen"); }
+        // Preset row clicked twice (High -> Ultra -> Low: "(restart)" shown), then back to High before closing
+        if ((t == 372 || t == 374) && client.currentScreen instanceof GsrOptionsScreen s) s.cyclePreset();
+        if (t == 377) { saveShot(client, UI_TEST + "_ui_preset_low"); logPreset("after selecting Low"); }
+        if (t == 378 && client.currentScreen instanceof GsrOptionsScreen s) s.cyclePreset();
+        if (t == 379 && client.currentScreen instanceof GsrOptionsScreen s) { s.cyclePreset(); logPreset("back to High"); }
         if (t == 380) { client.setScreen(null); press(GLFW.GLFW_KEY_F9); }
         if (t == 420) saveShot(client, UI_TEST + "_ui_overlay");
         if (t == 430 || t == 510 || t == 590 || t == 600) press(GLFW.GLFW_KEY_F8);   // 2 -> 3 -> 4 -> 1 -> 2
-        if (t == 500) saveShot(client, UI_TEST + "_ui_scale3");
-        if (t == 580) saveShot(client, UI_TEST + "_ui_scale4");
+        if (t == 500) { saveShot(client, UI_TEST + "_ui_scale3"); logPreset("F8 -> 1/3"); }
+        if (t == 580) { saveShot(client, UI_TEST + "_ui_scale4"); logPreset("F8 -> 1/4"); }
+        if (t == 595) logPreset("F8 -> 1/1");
+        if (t == 605) logPreset("F8 -> 1/2");
         if (t >= 610 && t < 616) press(GLFW.GLFW_KEY_F7);   // normal -> ... -> cost
         if (t == 660) saveShot(client, UI_TEST + "_ui_cost");
         if (t == 670) { press(GLFW.GLFW_KEY_F7); press(GLFW.GLFW_KEY_F9); }
@@ -332,6 +346,12 @@ public final class GsrClient implements ClientModInitializer {
             saveShot(client, UI_TEST + "_ui_final");
             LOG.info("GSR ui test done: scale {}, debug view {}, overlay {}", CONFIG.standaloneResolutionScale, CONFIG.debugView, CONFIG.statsOverlay);
         }
+    }
+
+    private static void logPreset(String step) {
+        GsrPreset p = currentPreset();
+        LOG.info("GSR ui test: {}: preset {}{} (scale {}, {} splats/page live, {} uploads/frame)", step, p == null ? "Custom" : p,
+                presetNeedsRestart() ? " (restart pending)" : "", CONFIG.standaloneResolutionScale, CONFIG.maxSplatsPerPage, CONFIG.uploadsPerFrame);
     }
 
     private static void press(int glfwKey) { net.minecraft.client.option.KeyBinding.onKeyPressed(net.minecraft.client.util.InputUtil.fromKeyCode(glfwKey, 0)); }
@@ -372,7 +392,7 @@ public final class GsrClient implements ClientModInitializer {
         }
         out.add(String.format("Queues: captures %d, coarse %d, workers %d, ready %d; summaries %,d; uploads %,d",
                 s.captureQueue(), s.coarsePending(), s.inFlight(), s.readyQueue(), s.summaries(), s.totalUploads()));
-        out.add(String.format("CPU: tick %.2f ms avg, %.2f ms max; workers %d threads, %,d jobs, %.2f ms/job",
+        out.add(String.format("CPU: tick %.3f ms avg, %.3f ms max; workers %d threads, %,d jobs, %.2f ms/job",
                 s.tickMsAvg(), s.tickMsMax(), CONFIG.workerThreads, s.workerJobs(), s.workerJobs() == 0 ? 0.0 : s.workerMs() / s.workerJobs()));
         RENDERER.appendStats(out, CONFIG, standaloneActive());
         MinecraftClient mc = MinecraftClient.getInstance();
@@ -390,7 +410,65 @@ public final class GsrClient implements ClientModInitializer {
     }
 
     /** Saves the settings changed in game (options screen, keys) to config/gsr.json. */
-    public static void saveConfig() { GsrConfigFile.saveRuntime(CONFIG_FILE, CONFIG); }
+    public static void saveConfig() { GsrConfigFile.saveRuntime(CONFIG_FILE, CONFIG, nextStartupSplatsPerPage); }
+
+    /**
+     * Splats per page of the preset chosen in the settings screen during this session (-1 = none chosen). Structural:
+     * the frame data and the SSBO slab size use the live value, so it is only written to the file, for the next startup.
+     */
+    private static int nextStartupSplatsPerPage = -1;
+
+    /** The live settings as they will be after a restart (pending splats per page included): what the Preset row shows. */
+    private static GsrConfig presetView() {
+        GsrConfig v = CONFIG.copy();
+        if (nextStartupSplatsPerPage > 0) v.maxSplatsPerPage = nextStartupSplatsPerPage;
+        return v;
+    }
+
+    /** Quality preset matching the current settings, or null ("Custom"). */
+    public static GsrPreset currentPreset() { return GsrPreset.current(presetView()); }
+
+    /** True when a preset chosen in game changes the splats per page at the next startup. */
+    public static boolean presetNeedsRestart() { return nextStartupSplatsPerPage > 0 && nextStartupSplatsPerPage != CONFIG.maxSplatsPerPage; }
+
+    /** Settings screen: runtime fields of the preset apply now, splats per page at the next startup (saved on close). */
+    public static void applyPreset(GsrPreset p) {
+        GsrConfig target = presetView();
+        p.apply(target);
+        CONFIG.copyRuntimeFrom(target);
+        nextStartupSplatsPerPage = target.maxSplatsPerPage;
+        LOG.info("GSR: preset {} selected (resolution 1/{}, {} uploads/frame, {} splats/page{})", p, CONFIG.standaloneResolutionScale,
+                CONFIG.uploadsPerFrame, target.maxSplatsPerPage, presetNeedsRestart() ? " at next startup" : "");
+    }
+
+    /**
+     * First launch (CLIENT_STARTED: GL context current, no world yet, so the structural maxSplatsPerPage still applies):
+     * GPU classified once. The preset is applied only if config/gsr.json did not exist; an existing file keeps its values
+     * and only gets the flag.
+     */
+    private static void detectGpu(MinecraftClient client) {
+        if (CONFIG.gpuDetectionDone) return;
+        GsrGpuInfo gpu;
+        try {
+            gpu = GsrGpuInfo.detect();
+        } catch (RuntimeException e) {
+            LOG.warn("GSR: GPU detection failed ({}), default settings kept", e.toString());
+            return;
+        }
+        GsrPreset p = GsrPreset.classify(gpu.vendor(), gpu.renderer(), gpu.vramMiB());
+        String vram = gpu.vramMiB() < 0 ? "VRAM unknown" : gpu.vramMiB() + " MiB" + ("ATI".equals(gpu.vramSource()) ? " free" : "");
+        CONFIG.gpuDetectionDone = true;
+        if (FRESH_CONFIG) {
+            p.apply(CONFIG);
+            CONFIG.validate();
+            LOG.info("GSR: GPU \"{}\" / \"{}\" ({}) -> preset {}", gpu.vendor(), gpu.renderer(), vram, p);
+            if (p == GsrPreset.OFF) LOG.warn("GSR: software OpenGL renderer, reflections disabled (can be enabled in the settings)");
+            GsrConfigFile.save(CONFIG_FILE, CONFIG);
+        } else {
+            LOG.info("GSR: GPU \"{}\" / \"{}\" ({}) -> preset {} suggested; existing {} kept unchanged", gpu.vendor(), gpu.renderer(), vram, p, CONFIG_FILE.getFileName());
+            GsrConfigFile.saveRuntime(CONFIG_FILE, CONFIG);
+        }
+    }
 
     /**
      * "GSR Reflections..." entry at the end of Video Settings (Fabric screen events, no mixin). Sodium replaces
@@ -422,7 +500,8 @@ public final class GsrClient implements ClientModInitializer {
         ensureWorld(client.world);
         if (manager != null && client.player != null) {
             manager.tick(client.player.getBlockX(), client.player.getBlockY(), client.player.getBlockZ(), Util.getMeasuringTimeMs());
-            if (buildStartMs >= 0 && manager.isIdle() && manager.stats().totalUploads() > 0) {
+            // totalUploads(), not stats(): stats() resets the tick maximum shown by /gsr stats
+            if (buildStartMs >= 0 && manager.totalUploads() > 0 && manager.isIdle()) {
                 GaussianChunkManager.Stats s = manager.stats();
                 LOG.info("GSR: clipmap built in {} s ({} jobs, {} ms of worker CPU, {} worker threads)",
                         String.format("%.1f", (Util.getMeasuringTimeMs() - buildStartMs) / 1000.0), s.workerJobs(), Math.round(s.workerMs()), CONFIG.workerThreads);

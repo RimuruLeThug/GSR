@@ -118,6 +118,66 @@ public final class CoreSelfTest {
             boolean restart2 = live.copyRuntimeFrom(file);
             check(!restart && restart2 && live.standaloneStrength == 0.5f && live.pagesX == 8,
                     "hot reload: structural fields unchanged and flagged");
+            file.gpuDetectionDone = true;
+            live.copyRuntimeFrom(file);
+            GsrConfig cp = file.copy();
+            check(live.gpuDetectionDone && cp.pagesX == 16 && cp.standaloneStrength == 0.5f && cp.gpuDetectionDone && cp != file,
+                    "GPU detection flag persisted by copyRuntimeFrom, copy() keeps structural fields");
+        }
+
+        System.out.println("== Quality presets and GPU classification");
+        {
+            check(GsrPreset.HIGH.matches(new GsrConfig()), "defaults = HIGH preset");
+            for (GsrPreset p : GsrPreset.QUALITY) {
+                GsrConfig c = new GsrConfig();
+                p.apply(c);
+                c.validate();
+                boolean others = true;
+                for (GsrPreset q : GsrPreset.QUALITY) if (q != p && q.matches(c)) others = false;
+                check(p.matches(c) && others && GsrPreset.current(c) == p, p + ": apply -> matches, no other preset matches");
+            }
+            GsrConfig custom = new GsrConfig();
+            GsrPreset.LOW.apply(custom);
+            custom.standaloneResolutionScale = 2;
+            GsrConfig off = new GsrConfig();
+            GsrPreset.OFF.apply(off);
+            GsrConfig toggled = new GsrConfig();
+            toggled.standaloneEnabled = false;
+            check(GsrPreset.current(custom) == null && !off.standaloneEnabled && GsrPreset.OFF.matches(off)
+                            && !GsrPreset.OFF.matches(new GsrConfig()) && GsrPreset.current(toggled) == GsrPreset.HIGH,
+                    "mixed values -> Custom; OFF disables standalone; the on/off toggle keeps the preset");
+            String[][] gpus = {
+                    // vendor, renderer, VRAM MiB, expected
+                    {"Intel", "Intel(R) UHD Graphics 620", "-1", "LOW"},
+                    {"Intel", "Intel(R) Iris(R) Xe Graphics", "-1", "LOW"},
+                    {"Intel", "Mesa Intel(R) UHD Graphics 620 (KBL GT2)", "-1", "LOW"},
+                    {"Intel", "Intel(R) Arc(TM) A770 Graphics", "16384", "HIGH"},
+                    {"Intel", "Intel(R) Arc(TM) Graphics", "-1", "LOW"},
+                    {"ATI Technologies Inc.", "AMD Radeon(TM) Graphics", "-1", "LOW"},
+                    {"AMD", "AMD Radeon Graphics (radeonsi, renoir, LLVM 15.0.7, DRM 3.49)", "-1", "LOW"},
+                    {"ATI Technologies Inc.", "AMD Radeon(TM) Vega 8 Graphics", "-1", "LOW"},
+                    {"ATI Technologies Inc.", "AMD Radeon 780M Graphics", "-1", "LOW"},
+                    {"ATI Technologies Inc.", "AMD Radeon RX 7800 XT", "16368", "HIGH"},
+                    {"ATI Technologies Inc.", "AMD Radeon RX 7800 XT", "-1", "HIGH"},
+                    {"ATI Technologies Inc.", "AMD Radeon RX 6500M", "4096", "HIGH"},
+                    {"ATI Technologies Inc.", "Radeon RX 550 Series", "2048", "MEDIUM"},
+                    {"NVIDIA Corporation", "NVIDIA GeForce MX350/PCIe/SSE2", "2048", "LOW"},
+                    {"NVIDIA Corporation", "NVIDIA GeForce GT 1030/PCIe/SSE2", "2048", "LOW"},
+                    {"NVIDIA Corporation", "NVIDIA GeForce GTX 1050/PCIe/SSE2", "2048", "MEDIUM"},
+                    {"NVIDIA Corporation", "NVIDIA GeForce GTX 650/PCIe/SSE2", "512", "LOW"},
+                    {"NVIDIA Corporation", "NVIDIA GeForce RTX 3060/PCIe/SSE2", "12288", "HIGH"},
+                    {"NVIDIA Corporation", "NVIDIA GeForce RTX 3060/PCIe/SSE2", "-1", "HIGH"},
+                    {"Mesa", "llvmpipe (LLVM 15.0.7, 256 bits)", "-1", "OFF"},
+                    {"Microsoft Corporation", "GDI Generic", "-1", "OFF"},
+                    {"Microsoft", "Microsoft Basic Render Driver", "-1", "OFF"},
+                    {null, null, "-1", "HIGH"},
+            };
+            StringBuilder wrong = new StringBuilder();
+            for (String[] g : gpus) {
+                GsrPreset got = GsrPreset.classify(g[0], g[1], Long.parseLong(g[2]));
+                if (got != GsrPreset.valueOf(g[3])) wrong.append(" [").append(g[1]).append(" -> ").append(got).append(", expected ").append(g[3]).append("]");
+            }
+            check(wrong.length() == 0, "GPU classifier on " + gpus.length + " renderer strings" + wrong);
         }
 
         System.out.println("== Budget / per-cell sorting (3D checkerboard, worst case)");
@@ -397,6 +457,18 @@ public final class CoreSelfTest {
                 int left = m2.stats().captureQueue();
                 check(initial > 50_000 && left == 0,
                         "capture queue drained in 400 ticks despite unloaded sections (" + initial + " -> " + left + ")");
+                // Bug seen in game: the client tick polled stats() every tick to detect the end of the build,
+                // and stats() resets the tick maximum, so /gsr stats always showed the max of one tick.
+                m2.tick(8, 2000, 8, now += 50);   // far move: a heavy tick (whole windows re-enqueued)
+                m2.stats();
+                m2.tick(8, 70, 8, now += 50);     // heavy again (move back), then light ticks polled like GsrClient.tick
+                for (int i = 0; i < 20; i++) { m2.tick(8, 70, 8, now += 50); m2.totalUploads(); }
+                GaussianChunkManager.Stats st = m2.stats();
+                for (int i = 0; i < 20; i++) m2.tick(8, 70, 8, now += 50);
+                double lightMax = m2.stats().tickMsMax();
+                check(st.tickMsMax() > lightMax && st.tickMsMax() >= st.tickMsAvg() && st.tickMsAvg() > 0,
+                        String.format("totalUploads() does not reset the tick max (max %.3f ms over the heavy tick, avg %.3f ms; light ticks only: %.3f ms)",
+                                st.tickMsMax(), st.tickMsAvg(), lightMax));
             }
         }
 

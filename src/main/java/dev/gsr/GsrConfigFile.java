@@ -37,12 +37,22 @@ public final class GsrConfigFile {
      * a session are taken from {@code live}: structural fields edited in the file since startup
      * (levels, pages...) are kept for the next startup. An unreadable file is not overwritten.
      */
-    public static void saveRuntime(Path file, GsrConfig live) {
+    public static void saveRuntime(Path file, GsrConfig live) { saveRuntime(file, live, -1); }
+
+    /**
+     * Same, and when {@code nextStartupSplatsPerPage > 0} also writes that structural value (preset chosen in the
+     * settings screen: the live value cannot change while the SSBO slabs exist, it applies at the next startup).
+     */
+    public static void saveRuntime(Path file, GsrConfig live, int nextStartupSplatsPerPage) {
         GsrConfig cfg = read(file);
         if (cfg == null) return;
         cfg.copyRuntimeFrom(live);
+        if (nextStartupSplatsPerPage > 0) cfg.maxSplatsPerPage = nextStartupSplatsPerPage;
         write(file, cfg);
     }
+
+    /** Writes every field of {@code cfg} (first launch: the file was just created with the defaults). */
+    public static void save(Path file, GsrConfig cfg) { write(file, cfg); }
 
     /** Validated content of the file, defaults if absent, null if unreadable. */
     private static GsrConfig read(Path file) {

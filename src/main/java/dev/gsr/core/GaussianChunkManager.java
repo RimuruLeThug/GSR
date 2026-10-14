@@ -297,6 +297,9 @@ public final class GaussianChunkManager implements AutoCloseable {
                         int summaries, long totalUploads,
                         double tickMsAvg, double tickMsMax, long workerJobs, double workerMs) {}
 
+    /** Pages uploaded since creation. Cheap, and unlike {@link #stats()} it does not reset the tick maximum. */
+    public long totalUploads() { return totalUploads; }
+
     public Stats stats() {
         int levels = clipmap.levels(), per = cfg.slotsPerLevel();
         int[] pages = new int[levels], nonEmpty = new int[levels];
