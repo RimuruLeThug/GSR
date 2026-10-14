@@ -249,15 +249,17 @@ public final class GsrRenderer {
             glUseProgram(progComposite);
             setCommon(progComposite, proj, invProj, view, invView, w, h, cfg);
             glUniform1i(loc(progComposite, "uDebugView"), cfg.debugView);
+            // Bench scratch created BEFORE the inputs are bound: its creation binds it on the active unit
+            // (unit 4 here), which the composite would otherwise read as uReflDist on that frame.
+            if (BENCH_REPEAT > 1 && (benchScratch == 0 || benchScratchW != w || benchScratchH != h)) {
+                if (benchScratch != 0) glDeleteTextures(benchScratch);
+                benchScratch = benchScratchTexture(w, h);
+            }
             bindTex(0, depthTex);
             bindTex(2, targets.history[cur]);
             bindTex(4, targets.distance[cur]);
             timer.begin(T_COMPOSITE);
             if (BENCH_REPEAT > 1) {   // not idempotent (blends into the scene): the extra repeats write a scratch image
-                if (benchScratch == 0 || benchScratchW != w || benchScratchH != h) {
-                    if (benchScratch != 0) glDeleteTextures(benchScratch);
-                    benchScratch = benchScratchTexture(w, h);
-                }
                 glBindImageTexture(0, benchScratch, 0, false, 0, GL_READ_WRITE, GL_RGBA8);
                 for (int r = 1; r < BENCH_REPEAT; r++) benchStep(gx, gy);
             }
@@ -365,6 +367,8 @@ public final class GsrRenderer {
         gpu.close();
         timer.close();
         targets.delete();
+        if (benchScratch != 0) glDeleteTextures(benchScratch);
+        benchScratch = 0; benchScratchW = benchScratchH = 0;
         glDeleteProgram(progDepthCopy); glDeleteProgram(progReflect); glDeleteProgram(progTemporal); glDeleteProgram(progComposite);
         initialized = false;
     }
