@@ -85,6 +85,8 @@ public final class GsrClient implements ClientModInitializer {
 
         ClientChunkEvents.CHUNK_LOAD.register((world, chunk) -> {
             ensureWorld(world);
+            buildChunkLoads++;
+            lastChunkLoadMs = Util.getMeasuringTimeMs();
             if (manager != null) manager.onChunkLoaded(chunk.getPos().x, chunk.getPos().z,
                     world.getBottomSectionCoord(), world.getTopSectionCoord() - 1);
         });
@@ -94,6 +96,7 @@ public final class GsrClient implements ClientModInitializer {
         });
 
         WorldRenderEvents.START.register(ctx -> {
+            if (manager != null) manager.frameWork(CONFIG.frameCaptureBudgetMs, Util.getMeasuringTimeMs());   // sections still waiting (world entry, teleport)
             if (manager != null && RENDERER.available()) RENDERER.beginFrame(ctx, manager, CONFIG);
         });
         // Before the translucent layer (checked in WorldRenderer#render 1.21.1: debug rendering precedes it).
@@ -495,17 +498,40 @@ public final class GsrClient implements ClientModInitializer {
 
     /** Time the world was entered, until the first complete clipmap build is logged (-1 = logged). */
     private static long buildStartMs = -1;
+    /** Chunks loaded by Minecraft since entering the world, and when the last one arrived (separates MC loading from GSR's own time). */
+    private static int buildChunkLoads;
+    private static long lastChunkLoadMs;
+    /** Development (autoshot runs): build progress logged every second until the clipmap is built. */
+    private static final boolean BUILD_TRACE = AUTOSHOT != null;
+    private static int buildTraceTicks, buildTicks;
+    private static double buildFirstTickMs, buildTickMaxMs;
 
     private static void tick(MinecraftClient client) {
         ensureWorld(client.world);
         if (manager != null && client.player != null) {
+            long t0 = System.nanoTime();
             manager.tick(client.player.getBlockX(), client.player.getBlockY(), client.player.getBlockZ(), Util.getMeasuringTimeMs());
+            if (buildStartMs >= 0) {   // first tick (whole clipmap windows enqueued) reported apart from the others
+                double ms = (System.nanoTime() - t0) / 1e6;
+                if (buildTicks++ == 0) buildFirstTickMs = ms; else buildTickMaxMs = Math.max(buildTickMaxMs, ms);
+                if (BUILD_TRACE && ms > 2.0) LOG.info("GSR build trace: slow tick {} ({} ms): {}", buildTicks, String.format("%.3f", ms), manager.progressLine());
+            } else if (BUILD_TRACE) {   // after the build: ticks above 0.8 ms, to explain the /gsr stats maximum
+                double ms = (System.nanoTime() - t0) / 1e6;
+                if (ms > 0.8) LOG.info("GSR trace: tick {} ms after the build (autoshot tick {}): {}", String.format("%.3f", ms), autoShotTicks, manager.progressLine());
+            }
             // totalUploads(), not stats(): stats() resets the tick maximum shown by /gsr stats
             if (buildStartMs >= 0 && manager.totalUploads() > 0 && manager.isIdle()) {
                 GaussianChunkManager.Stats s = manager.stats();
-                LOG.info("GSR: clipmap built in {} s ({} jobs, {} ms of worker CPU, {} worker threads)",
-                        String.format("%.1f", (Util.getMeasuringTimeMs() - buildStartMs) / 1000.0), s.workerJobs(), Math.round(s.workerMs()), CONFIG.workerThreads);
+                long now = Util.getMeasuringTimeMs();
+                LOG.info("GSR: clipmap built in {} s ({} jobs, {} ms of worker CPU, {} worker threads; GSR tick: first {} ms, max of the others {} ms; frame captures: first {} ms, max of the others {} ms; {} chunks loaded, last one at {} s)",
+                        String.format("%.1f", (now - buildStartMs) / 1000.0), s.workerJobs(), Math.round(s.workerMs()), CONFIG.workerThreads,
+                        String.format("%.3f", buildFirstTickMs), String.format("%.3f", buildTickMaxMs), String.format("%.3f", manager.frameCaptureFirstMs()), String.format("%.3f", manager.frameCaptureMsMax()),
+                        buildChunkLoads, String.format("%.1f", (lastChunkLoadMs - buildStartMs) / 1000.0));
+                if (BUILD_TRACE) LOG.info("GSR build trace: {}", manager.progressLine());
                 buildStartMs = -1;
+            } else if (BUILD_TRACE && buildStartMs >= 0 && ++buildTraceTicks % 20 == 0) {
+                LOG.info("GSR build trace {} s: {} chunks loaded; {}", String.format("%.1f", (Util.getMeasuringTimeMs() - buildStartMs) / 1000.0),
+                        buildChunkLoads, manager.progressLine());
             }
         }
     }
@@ -522,6 +548,11 @@ public final class GsrClient implements ClientModInitializer {
         source = new McSnapshotSource(world, materials);
         manager = new GaussianChunkManager(CONFIG, source);
         buildStartMs = Util.getMeasuringTimeMs();
+        buildChunkLoads = 0;
+        lastChunkLoadMs = buildStartMs;
+        buildTraceTicks = 0;
+        buildTicks = 0;
+        buildFirstTickMs = buildTickMaxMs = 0;
     }
 
     /**

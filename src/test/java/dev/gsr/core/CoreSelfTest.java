@@ -106,10 +106,10 @@ public final class CoreSelfTest {
         {
             GsrConfig bad = new GsrConfig();
             bad.levels = 9; bad.pagesY = 0; bad.baseOpacity = Float.NaN; bad.sigmaTangent = -1f;
-            bad.standaloneResolutionScale = 7; bad.capturesPerTick = 0; bad.maxTraceDistance = Float.NaN;
+            bad.standaloneResolutionScale = 7; bad.maxCapturesPerTick = 0; bad.captureBudgetMs = Float.NaN; bad.maxTraceDistance = Float.NaN;
             bad.validate();
             check(bad.levels == GsrLayout.MAX_LEVELS && bad.pagesY == 2 && bad.baseOpacity == 0f && bad.sigmaTangent > 0f
-                    && bad.standaloneResolutionScale == GsrConfig.MAX_RESOLUTION_SCALE && bad.capturesPerTick == 1 && bad.maxTraceDistance > 0f,
+                    && bad.standaloneResolutionScale == GsrConfig.MAX_RESOLUTION_SCALE && bad.maxCapturesPerTick == 1 && bad.captureBudgetMs == 0f && bad.maxTraceDistance > 0f,
                     "validate() clamps out-of-range values");
             GsrConfig live = new GsrConfig(), file = new GsrConfig();
             file.standaloneStrength = 0.5f;
@@ -332,7 +332,7 @@ public final class CoreSelfTest {
         System.out.println("== Full pipeline + reference tracer");
         GsrConfig cfg = new GsrConfig();
         cfg.levels = 3; cfg.pagesX = 4; cfg.pagesY = 2; cfg.pagesZ = 4;
-        cfg.capturesPerTick = 100_000; cfg.coarseJobsPerTick = 10_000; cfg.coarseDebounceMs = 0;
+        cfg.maxCapturesPerTick = 100_000; cfg.captureBudgetMs = 50f; cfg.coarseJobsPerTick = 10_000; cfg.coarseDebounceMs = 0;
         World world = new World();
         CpuReferenceTracer gpu = new CpuReferenceTracer(cfg);
         try (GaussianChunkManager m = new GaussianChunkManager(cfg, world::capture)) {
@@ -446,7 +446,7 @@ public final class CoreSelfTest {
             // Bug seen in game: every unloaded section consumed a capture from the budget; the queue
             // (~100,000 entries) never drained. Here only 5x5 columns are "loaded".
             GsrConfig c2 = new GsrConfig();
-            c2.capturesPerTick = 8; c2.coarseDebounceMs = 0;
+            c2.maxCapturesPerTick = 8; c2.captureBudgetMs = 50f; c2.coarseDebounceMs = 0;
             World w2 = new World();
             SectionSnapshotSource src = (sx, sy, sz) -> Math.abs(sx) <= 2 && Math.abs(sz) <= 2 ? w2.capture(sx, sy, sz) : null;
             try (GaussianChunkManager m2 = new GaussianChunkManager(c2, src)) {
@@ -469,6 +469,42 @@ public final class CoreSelfTest {
                 check(st.tickMsMax() > lightMax && st.tickMsMax() >= st.tickMsAvg() && st.tickMsAvg() > 0,
                         String.format("totalUploads() does not reset the tick max (max %.3f ms over the heavy tick, avg %.3f ms; light ticks only: %.3f ms)",
                                 st.tickMsMax(), st.tickMsAvg(), lightMax));
+            }
+        }
+
+        System.out.println("== Capture time budget (clipmap build after entering a world)");
+        {
+            // The fixed 48 copies per tick made the first build last ~16 s in game: half of the captures are air
+            // sections, and the queue's tail is unloaded sections, both nearly free. The loop is now bounded by
+            // client-thread time. Fake clock: a loaded section costs 100 us, an unloaded one nothing.
+            long[] clock = {0};
+            int[] copies = {0};
+            SectionSnapshotSource src = (sx, sy, sz) -> {
+                if (Math.abs(sx) > 2 || Math.abs(sz) > 2 || sy < 0 || sy > 7) return null;
+                clock[0] += 100_000;
+                copies[0]++;
+                return VoxelSource.EMPTY;
+            };
+            int[][] cases = {{1000, 1000, 10}, {1000, 4, 4}, {0, 1000, 1}};   // budget us, max copies, expected copies/tick
+            for (int[] c : cases) {
+                GsrConfig cb = new GsrConfig();
+                cb.captureBudgetMs = c[0] / 1000f; cb.maxCapturesPerTick = c[1]; cb.coarseDebounceMs = 0;
+                try (GaussianChunkManager mb = new GaussianChunkManager(cb, src, () -> clock[0])) {
+                    long now = 0;
+                    int ticks = 0, most = 0, total = 0;
+                    int maxTicks = c[2] == 1 ? 50 : 300;   // budget 0: one attempt per tick, the full queue would take ~131,000 ticks
+                    for (; ticks < maxTicks; ticks++) {
+                        copies[0] = 0;
+                        mb.tick(8, 70, 8, now += 50);
+                        most = Math.max(most, copies[0]);
+                        total += copies[0];
+                        if (mb.stats().captureQueue() == 0) break;
+                    }
+                    check(most == c[2] && (c[2] == 1 ? total > 0 : total == 200), String.format("budget %.1f ms, max %d: at most %d copies per tick (seen %d), %d loaded sections captured",
+                            c[0] / 1000f, c[1], c[2], most, total));
+                    if (c[2] == 10) check(ticks <= 25, "200 loaded + ~131,000 unloaded sections captured in " + ticks
+                            + " ticks (fixed 48 copies / 3072 attempts per tick needed >= 42)");
+                }
             }
         }
 

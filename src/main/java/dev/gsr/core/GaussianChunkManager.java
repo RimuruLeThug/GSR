@@ -63,13 +63,27 @@ public final class GaussianChunkManager implements AutoCloseable {
     private final List<Integer> pendingInvalidations = new ArrayList<>();
     private int psx, psy, psz;
     private long tickCount;
+    private boolean windowMovedSinceEviction;
     /** Splats per GPU slot as uploaded (-1 = invalid slot). CPU mirror of the meta, for stats. */
     private final int[] slotSplats;
     private long totalUploads;
+    /** Capture attempts since creation: sections copied, empty (air), not loaded (null). */
+    private long capturesCopied, capturesEmpty, capturesMissing;
+    /** Client-thread time spent in the capture loop since creation (ns). */
+    private long captureNanos;
+    private double frameCaptureMsMax, frameCaptureFirstMs;
+    private long frameCaptureCalls;
+    private final java.util.function.LongSupplier clock;
     /** Client-thread cost of tick(): moving average and maximum since the last stats() call (ms). */
     private double tickMsAvg, tickMsMax;
 
     public GaussianChunkManager(GsrConfig cfg, SectionSnapshotSource source) {
+        this(cfg, source, System::nanoTime);
+    }
+
+    /** @param clock nanosecond clock of the capture time budget (injectable for tests). */
+    GaussianChunkManager(GsrConfig cfg, SectionSnapshotSource source, java.util.function.LongSupplier clock) {
+        this.clock = clock;
         this.cfg = cfg.validate();
         this.clipmap = new GaussianClipmap(cfg);
         this.source = source;
@@ -145,6 +159,7 @@ public final class GaussianChunkManager implements AutoCloseable {
 
         // 1. Toroidal recentering: only the incoming pages need to be (re)built.
         for (PageKey k : clipmap.update(playerBx, playerBy, playerBz)) {
+            if (tickCount > 1) windowMovedSinceEviction = true;   // the initial placement leaves nothing outside coverage
             pendingInvalidations.add(clipmap.slotIndex(k));
             latestVersion.remove(k);
             if (k.level() == 0) {
@@ -176,24 +191,28 @@ public final class GaussianChunkManager implements AutoCloseable {
         //    a chunk lookup: it does not consume the copy budget, otherwise L3 coverage
         //    (+/-512 blocks, well beyond the render distance) fills the queue with empty sections that
         //    never drains (seen in game: ~100,000 entries). Separate cap to bound the tick.
-        int budget = cfg.capturesPerTick;
-        int attempts = cfg.capturesPerTick * 64;
-        for (int b = 0; b < DIST_BUCKETS && budget > 0 && attempts > 0; b++) {
-            ArrayDeque<Long> q = captureBuckets[b];
-            while (budget > 0 && attempts > 0 && !q.isEmpty()) {
-                long key = q.poll();
-                captureQueued.remove(key);
-                int sx = GsrLayout.sectionKeyX(key), sy = GsrLayout.sectionKeyY(key), sz = GsrLayout.sectionKeyZ(key);
-                if (!clipmap.sectionInCoverage(sx, sy, sz)) continue;
-                attempts--;
-                VoxelSource src = source.capture(sx, sy, sz);
-                if (src == null) continue; // not loaded: will be signaled again when the chunk loads
-                budget--;
-                submitSectionJob(key, sx, sy, sz, src);
-            }
-        }
+        //    Bounded by client-thread time (captureBudgetMs, checked before each attempt, at least one
+        //    attempt per tick), the counts are only upper bounds. A fixed 48 copies per tick made the
+        //    first build last ~16 s at render distance 12, mostly waiting: air sections and unloaded
+        //    sections cost microseconds each.
+        captureStep(cfg.captureBudgetMs);
 
         // 4. Coarse pages whose debounce has elapsed.
+        coarseStep(nowMs);
+
+        // 5. Periodic eviction of summaries outside coverage.
+        //    Only if the window moved since the last eviction: summaries are only created for sections in
+        //    coverage. Measured in game: the first eviction pass over ~12,000 summaries took 1.1 ms (tick 200),
+        //    the largest tick after the clipmap build at a standstill.
+        if (tickCount % 200 == 0 && windowMovedSinceEviction) {
+            windowMovedSinceEviction = false;
+            summaries.keySet().removeIf(k -> !clipmap.sectionInCoverage(
+                    GsrLayout.sectionKeyX(k), GsrLayout.sectionKeyY(k), GsrLayout.sectionKeyZ(k)));
+        }
+    }
+
+    private void coarseStep(long nowMs) {
+        if (coarseDue.isEmpty()) return;
         int coarseBudget = cfg.coarseJobsPerTick;
         for (Iterator<Map.Entry<PageKey, Long>> it = coarseDue.entrySet().iterator(); it.hasNext() && coarseBudget > 0; ) {
             Map.Entry<PageKey, Long> e = it.next();
@@ -203,12 +222,59 @@ public final class GaussianChunkManager implements AutoCloseable {
             submitCoarseJob(e.getKey());
             coarseBudget--;
         }
+    }
 
-        // 5. Periodic eviction of summaries outside coverage.
-        if (tickCount % 200 == 0) {
-            summaries.keySet().removeIf(k -> !clipmap.sectionInCoverage(
-                    GsrLayout.sectionKeyX(k), GsrLayout.sectionKeyY(k), GsrLayout.sectionKeyZ(k)));
+    /**
+     * Extra work between ticks (call once per rendered frame, client thread, after the first tick): captures
+     * within budgetMs, then due coarse pages (coarseJobsPerTick). Ticks run at 20 Hz, so a per-tick budget alone
+     * gives the captures only ~30 ms of client time per second, and coarse pages 160 submissions per second.
+     * Measured in game: most of a capture's cost is the biome tint sampling (~40 us per non-empty section), so the
+     * first build was limited by that time slice, then by the coarse rate. Nearly free once the queues are empty.
+     */
+    public void frameWork(float budgetMs, long nowMs) {
+        if (tickCount == 0) return;   // window not placed yet
+        if (!captureQueued.isEmpty() && budgetMs > 0f) {
+            long t0 = clock.getAsLong();
+            captureStep(budgetMs);
+            double ms = (clock.getAsLong() - t0) / 1e6;
+            if (frameCaptureCalls++ == 0) frameCaptureFirstMs = ms; else frameCaptureMsMax = Math.max(frameCaptureMsMax, ms);
         }
+        if (budgetMs > 0f) coarseStep(nowMs);
+    }
+
+    /**
+     * Longest capture step of frameWork() since creation, first call excluded (ms). The budget is checked before
+     * each capture, so one capture can overshoot it (cold biome color cache: several ms).
+     */
+    public double frameCaptureMsMax() { return frameCaptureMsMax; }
+    /** Capture time of the first frameWork() call that had captures to do (ms). */
+    public double frameCaptureFirstMs() { return frameCaptureFirstMs; }
+
+    private void captureStep(float budgetMs) {
+        long c0 = clock.getAsLong();
+        long deadline = c0 + (long) (budgetMs * 1e6);
+        int budget = cfg.maxCapturesPerTick;
+        int attempts = cfg.maxCapturesPerTick * 64;
+        boolean first = true;
+        captureLoop:
+        for (int b = 0; b < DIST_BUCKETS && budget > 0 && attempts > 0; b++) {
+            ArrayDeque<Long> q = captureBuckets[b];
+            while (budget > 0 && attempts > 0 && !q.isEmpty()) {
+                if (!first && clock.getAsLong() - deadline >= 0) break captureLoop;
+                first = false;
+                long key = q.poll();
+                captureQueued.remove(key);
+                int sx = GsrLayout.sectionKeyX(key), sy = GsrLayout.sectionKeyY(key), sz = GsrLayout.sectionKeyZ(key);
+                if (!clipmap.sectionInCoverage(sx, sy, sz)) continue;
+                attempts--;
+                VoxelSource src = source.capture(sx, sy, sz);
+                if (src == null) { capturesMissing++; continue; } // not loaded: will be signaled again when the chunk loads
+                if (src == VoxelSource.EMPTY) capturesEmpty++; else capturesCopied++;
+                budget--;
+                submitSectionJob(key, sx, sy, sz, src);
+            }
+        }
+        captureNanos += clock.getAsLong() - c0;
     }
 
     private long bumpVersion(PageKey k) {
@@ -299,6 +365,13 @@ public final class GaussianChunkManager implements AutoCloseable {
 
     /** Pages uploaded since creation. Cheap, and unlike {@link #stats()} it does not reset the tick maximum. */
     public long totalUploads() { return totalUploads; }
+
+    /** Build progress for the log (cheap, resets nothing): queues and capture counters. */
+    public String progressLine() {
+        return "captures queued " + captureQueued.size() + ", copied " + capturesCopied + ", empty " + capturesEmpty
+                + ", not loaded " + capturesMissing + " (" + Math.round(captureNanos / 1e6) + " ms); coarse " + coarseDue.size() + ", workers " + inFlight.get()
+                + ", ready " + ready.size() + ", uploads " + totalUploads + ", jobs " + workerJobs.get();
+    }
 
     public Stats stats() {
         int levels = clipmap.levels(), per = cfg.slotsPerLevel();

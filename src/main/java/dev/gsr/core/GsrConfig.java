@@ -20,8 +20,21 @@ public final class GsrConfig {
     public float baseOpacity = 1.0f;   // surfels cut to their face: a single one covers a point, 0.95 let 5% of sky through
 
     public int workerThreads = Math.max(1, Runtime.getRuntime().availableProcessors() / 4);
-    /** Section snapshots taken on the main thread per tick (cost: PalettedContainer copy). */
-    public int capturesPerTick = 48;
+    /**
+     * Client-thread time per tick spent taking section snapshots (PalettedContainer copies), in ms. The capture
+     * loop stops when it is spent; at least one section is captured per tick. Replaces the former fixed
+     * "capturesPerTick" = 48, which made the clipmap build after entering a world last ~16 s (half of the
+     * captures are air sections that cost almost nothing, and the queue's tail is unloaded sections).
+     */
+    public float captureBudgetMs = 1.5f;
+    /**
+     * Extra capture time per rendered frame (ms) while sections are waiting, so the build is not limited to 20 ticks
+     * per second; due coarse pages are also submitted per frame (coarseJobsPerTick each time). Costs nothing once the
+     * queues are empty. 0 = captures and coarse pages in ticks only (behaviour before 2026-10-14).
+     */
+    public float frameCaptureBudgetMs = 1.0f;
+    /** Upper bound on sections copied per tick, whatever the time budget (non-loaded attempts: 64x this). */
+    public int maxCapturesPerTick = 1024;
     /** Coarse pages (L>=1) submitted per tick. */
     public int coarseJobsPerTick = 8;
     /** Pages uploaded to the GPU per frame. */
@@ -91,7 +104,9 @@ public final class GsrConfig {
         if (!(sigmaNormal > 0f)) sigmaNormal = 0.1f;
         baseOpacity = clampF(baseOpacity, 0f, 1f);
         workerThreads = clamp(workerThreads, 1, 64);
-        capturesPerTick = Math.max(1, capturesPerTick);
+        captureBudgetMs = clampF(captureBudgetMs, 0f, 50f);
+        frameCaptureBudgetMs = clampF(frameCaptureBudgetMs, 0f, 50f);
+        maxCapturesPerTick = clamp(maxCapturesPerTick, 1, 1 << 20);
         coarseJobsPerTick = Math.max(1, coarseJobsPerTick);
         uploadsPerFrame = Math.max(1, uploadsPerFrame);
         coarseDebounceMs = Math.max(0, coarseDebounceMs);
@@ -124,7 +139,7 @@ public final class GsrConfig {
      */
     public boolean copyRuntimeFrom(GsrConfig o) {
         sigmaTangent = o.sigmaTangent; sigmaNormal = o.sigmaNormal; baseOpacity = o.baseOpacity;
-        capturesPerTick = o.capturesPerTick; coarseJobsPerTick = o.coarseJobsPerTick;
+        captureBudgetMs = o.captureBudgetMs; frameCaptureBudgetMs = o.frameCaptureBudgetMs; maxCapturesPerTick = o.maxCapturesPerTick; coarseJobsPerTick = o.coarseJobsPerTick;
         uploadsPerFrame = o.uploadsPerFrame; coarseDebounceMs = o.coarseDebounceMs;
         standaloneEnabled = o.standaloneEnabled; standaloneRoughness = o.standaloneRoughness;
         standaloneStrength = o.standaloneStrength; standaloneFloorStrength = o.standaloneFloorStrength;
