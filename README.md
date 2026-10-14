@@ -40,7 +40,8 @@ All of this was tested on Windows 11, with an RX 7800 XT and an AMD driver.
 - The first-launch GPU classifier on Intel, NVIDIA, AMD integrated GPUs and software renderers (covered by unit tests only), a real fresh install classified as Low, the Low preset's performance on a modest GPU, and the "pick Low in the screen, then restart" chain.
 - The SSBO limit check on real low-limit drivers or a real out-of-memory (only fault injection was tried), and the shader info-log warning (AMD returns empty logs). Known gaps: after a GPU initialization failure the chunk manager keeps capturing pages (wasted CPU), and a shader failing after buffer allocation leaks GPU resources.
 - Public shaderpacks. Complementary Reimagined and Unbound r5.9.3 were tested with Iris 1.8.8: they load normally and GSR switches to service mode, but they **do not call `gsrTrace()`**. **With these packs, GSR therefore brings no visible change**: their reflections remain their own. Integration is up to their authors. See [`docs/IRIS_INTEGRATION.md`](docs/IRIS_INTEGRATION.md).
-- Window sizes other than 2560×1369, for threshold tuning.
+- Window sizes other than 2560×1369 and 854×480 (the latter checked at scales 1-4 on 2026-10-14: no edge stripe, no offset). Not checked: 1366×768, odd sizes such as 1281×721, 1919×1079, live window resize.
+- Clipmap build under load: time-budgeted captures cut the build from 15.9 s to about 6.8 s at the reference spot (2026-10-14, RX 7800 XT, render distance 12, 4 workers), but the client tick still reaches 9-11 ms during the build (2 ms target not met); stutter, teleports, Sodium/Iris during the build and modest CPUs were not measured.
 
 macOS is **not supported**, because it does not offer OpenGL 4.3.
 
@@ -101,7 +102,7 @@ Verified on 2026-10-14 (Windows 11, RX 7800 XT): a fresh install logs `GSR: GPU 
 | `/gsr bricks on\|off` | Enables or disables the per-brick occupancy mask (diagnostic) |
 | `/gsr reload` | Re-reads `config/gsr.json` |
 
-**`config/gsr.json`** is created with all default values (or the preset chosen for your GPU on first launch). Missing fields are rewritten and values are clamped. An unreadable file is kept as is and the default values are used. `/gsr reload` applies the rendering and budget fields live. The number of levels, the pages, the number of splats per page, the SSBO binding point and the threads require a restart.
+**`config/gsr.json`** is created with all default values (or the preset chosen for your GPU on first launch). Missing fields are rewritten and values are clamped. An unreadable file is kept as is and the default values are used. `/gsr reload` applies the rendering and budget fields live. The number of levels, the pages, the number of splats per page, the SSBO binding point and the threads require a restart. Capture budget fields: `captureBudgetMs` (1.5, per tick), `maxCapturesPerTick` (1024) and `frameCaptureBudgetMs` (1.0, 0 = off, per frame); the old `capturesPerTick` key is ignored.
 
 ## Measured performance
 

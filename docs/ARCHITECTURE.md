@@ -171,7 +171,7 @@ linear, `rgba8` written into the main framebuffer **before** the hand and the HU
 
 ## 5. Threads, synchronization, robustness
 
-* Client thread: events, captures (budget 48/tick, nearest first), scheduling, uploads
+* Client thread: events, captures (time budget `captureBudgetMs` per tick plus a per-frame pass, nearest first), scheduling, uploads
   (budget 32 pages/frame), rendering.
 * Workers (`cores/4`, low priority): summaries + generation. Immutable input data, `PageData`
   as output through a lock-free queue.
@@ -470,8 +470,23 @@ texel count (quarter ≈ third). On a smaller GPU the throughput (old figures) i
 * `/gsr stats` has a new `CPU:` line: client tick average and maximum since the previous call, worker job count and
   ms per job. The log prints `GSR: clipmap built in X s (jobs, worker CPU, worker threads)` once the clipmap has
   been filled after entering a world.
-* Measured: clipmap built in 15.8 s with 1 and with 4 workers (limited by `capturesPerTick` = 48, not by the
-  workers); client tick max 0.54-1.09 ms over three runs; 0.44 ms/job with 1 worker, 0.97-0.99 ms/job with 4.
+* Measured: clipmap built in 15.8 s with 1 and with 4 workers; client tick max 0.54-1.09 ms over three runs;
+  0.44 ms/job with 1 worker, 0.97-0.99 ms/job with 4. The earlier claim that this was limited "by `capturesPerTick`,
+  not by the workers" was only partly right: see the next item for the measured cause.
+
+**Time-budgeted captures (2026-10-14, commit `bfb7384`)**. The fixed 48 snapshots per tick are replaced by a client-thread
+time budget: `captureBudgetMs` (1.5 ms per tick, at least one attempt), `maxCapturesPerTick` (1024, upper bound; 64x that
+for unloaded-section attempts) and a per-frame pass (`frameCaptureBudgetMs`, 1.0 ms, 0 = off) that takes pending captures and
+submits due coarse pages between ticks. `capturesPerTick` is removed; an old value in `gsr.json` is ignored. Summaries
+outside coverage are evicted only when the clipmap window moved since the last pass (removes a 1.1 ms tick every 10 s while
+standing still). Injectable clock (core stays Minecraft-free), 4 new `CoreSelfTest` checks with a fake clock.
+Measured (Windows 11, RX 7800 XT, 2560x1369, reference spot, render distance 12, 4 workers, `GSR: clipmap built` log line):
+clipmap build 15.9 s -> 6.4-7.0 s; post-build tick max 0.51-0.57 -> 0.04-0.05 ms. Real cause of the old 15.8 s: the fixed 48
+captures per tick were wasted on empty/unloaded sections (profiled). Floors: chunk loading itself takes 2.2-2.4 s; biome
+tint sampling is about 80 % of a capture's cost; with the per-frame pass off the build takes 11.3-11.7 s.
+**Not met / not verified**: tick max <= 2 ms during the build (measured 8.9-10.7 ms after the first tick, was 17.7); single
+per-frame capture calls spike to 12-14 ms (cause inferred, not proven: cold biome cache); stutter and frame time during the
+build were not measured; rebuilds after a teleport; Sodium/Iris during the build; modest CPUs.
 
 **Tried without gain: compaction of the GSR rays** (patch kept outside the repository). Pass 1a = SSR only, appending
 the texels left to GSR to an SSBO list (one atomic per 8×8 group); a 1×1×1 pass writes the arguments of
@@ -479,6 +494,23 @@ the texels left to GSR to an SSBO list (one atomic per 8×8 group); a 1×1×1 pa
 reference. Corrected bench: half resolution 0.598 → **0.715 ms**, SSR only 0.237 → 0.286 ms, full resolution
 1.699 → **1.913 ms**. The two extra barriers and the args pass cost ~0.05 ms, and the compacted rays are not traced
 faster: the idle lanes of SSR texels were already hidden by the other waves in flight.
+
+**Tried without gain: SSR on a reduced nearest-per-block depth pre-pass** (2026-10-14, not kept). Throughput bench, reflection
+pass including the pre-pass: default 0.415 -> 0.462 ms, scale 3 0.196 -> 0.241, scale 4 0.145 -> 0.197 (+11..36 %, a loss at
+every scale). The pre-pass costs ~0.03-0.06 ms and saves at most ~0.01 ms. Integrated GPUs unmeasured.
+
+**Tried without gain: composite micro-optimizations** (2026-10-14, not kept): early-out when there is no history, single
+translucent mask, batched reads, shared-memory depth tile, incremental view positions. Only -4..6 % on the composite
+(0.093-0.096 -> 0.087-0.091 ms), output identical; the shared-memory tile alone was worse (0.109 ms). The pass is
+latency/occupancy-bound on this GPU. Integrated GPUs unmeasured.
+
+**Bench-mode fix (commit `b46fe52`)**: the bench scratch target is created before binding unit 4 (it was read as `uReflDist`
+on its creation frame) and freed in `close()`. Normal rendering unchanged.
+
+**Window size 854x480 (2026-10-14)**: verified at scales 1-4: no edge stripe, no offset, no errors; temporal frame 0 vs 7
+difference at water-animation noise level; GPU totals 0.444 (scale 1), 0.280 (2), 0.238 (3), 0.229 (4) ms. Code review of the
+low-resolution edge arithmetic found no defect. **Not verified**: 1366x768, odd sizes such as 1281x721, 1919x1079, live window
+resize.
 
 **SSBO limit checks and clean failure (2026-10-14, commit `5af7bf3`)**. Before allocating, `GsrGpuResources` logs once
 `GL_MAX_SHADER_STORAGE_BLOCK_SIZE` (`glGetInteger64`), `GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS` and
