@@ -480,6 +480,24 @@ reference. Corrected bench: half resolution 0.598 → **0.715 ms**, SSR only 0.2
 1.699 → **1.913 ms**. The two extra barriers and the args pass cost ~0.05 ms, and the compacted rays are not traced
 faster: the idle lanes of SSR texels were already hidden by the other waves in flight.
 
+**SSBO limit checks and clean failure (2026-10-14, commit `5af7bf3`)**. Before allocating, `GsrGpuResources` logs once
+`GL_MAX_SHADER_STORAGE_BLOCK_SIZE` (`glGetInteger64`), `GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS` and
+`GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS` with the planned sizes. A configuration exceeding them disables GSR with a message
+naming the fields to lower (`maxSplatsPerPage`, `pagesX/Y/Z`, `levels`, `ssboBindingBase`). Stale GL errors are drained
+(bounded) first, each `glBufferData` is checked, and on `GL_OUT_OF_MEMORY` or any other error the buffers already
+created are deleted before throwing (scratch buffers are allocated last). Non-empty shader info logs on success are logged
+at WARN once per shader and stage. Dev-only fault injection, `runClient` only: `-PgsrFakeMaxSsboBlock=<bytes>` (fake
+block-size limit) and `-PgsrFakeSsboOom` (fake out-of-memory).
+Verified (Windows 11, RX 7800 XT, AMD driver): log `GSR: SSBO limits: max block 2048 MiB (2147483647 B), 96 bindings, 96
+compute blocks; planned: splats 64 MiB (1024 slots x 2048 splats), cells 2048 KiB, meta 32 KiB, frame 208 B, bindings
+10..13`. Fake 16 MiB limit: `GSR disabled: GPU initialization failed` with the message, the game ran about 69 s with
+vanilla water and no further error, `/gsr stats` shows `Render: disabled (see the log)`. Fake OOM: clean disable and
+`deleted the 3 SSBO(s) created before the failure`. Normal path: reflections and GPU time unchanged (images within
+water-animation noise). **Not verified**: real low-limit drivers or a real OOM; the bindings and compute-blocks conditions
+(never triggered); the shader info-log WARN (AMD returns empty logs, needs NVIDIA/Intel). **Known gaps**: after a GPU
+init failure the chunk manager keeps capturing and generating pages (wasted CPU); `GsrRenderer.ensureInit` leaks GPU
+resources if a shader fails after the buffer allocation.
+
 **Settings screen and keys (2026-10-14, verified in game with `-PgsrUiTest=<prefix>`, which scripts the screens and keys
 and takes a screenshot of each step)**. No mixin: Fabric `ScreenEvents.AFTER_INIT` appends a
 "GSR Reflections..." entry to the `OptionListWidget` of `VideoOptionsScreen` (with Sodium, which replaces that

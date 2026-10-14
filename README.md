@@ -38,6 +38,7 @@ All of this was tested on Windows 11, with an RX 7800 XT and an AMD driver.
 
 - **NVIDIA** and **Intel** drivers.
 - The first-launch GPU classifier on Intel, NVIDIA, AMD integrated GPUs and software renderers (covered by unit tests only), a real fresh install classified as Low, the Low preset's performance on a modest GPU, and the "pick Low in the screen, then restart" chain.
+- The SSBO limit check on real low-limit drivers or a real out-of-memory (only fault injection was tried), and the shader info-log warning (AMD returns empty logs). Known gaps: after a GPU initialization failure the chunk manager keeps capturing pages (wasted CPU), and a shader failing after buffer allocation leaks GPU resources.
 - Public shaderpacks. Complementary Reimagined and Unbound r5.9.3 were tested with Iris 1.8.8: they load normally and GSR switches to service mode, but they **do not call `gsrTrace()`**. **With these packs, GSR therefore brings no visible change**: their reflections remain their own. Integration is up to their authors. See [`docs/IRIS_INTEGRATION.md`](docs/IRIS_INTEGRATION.md).
 - Window sizes other than 2560×1369, for threshold tuning.
 
@@ -50,7 +51,7 @@ macOS is **not supported**, because it does not offer OpenGL 4.3.
 3. Put the GSR jar (`gsr-<version>.jar`, *Releases* tab) in `mods/`. Sodium and Iris are optional.
 4. Launch the game. The `config/gsr.json` file is created on first launch. Only in that case, GSR reads the GPU (vendor, renderer, free video memory) and picks a quality preset (see below). An existing `config/gsr.json` is never changed, apart from a `gpuDetectionDone` flag added to it.
 
-**OpenGL 4.3 is required.** If your machine does not provide it, the mod disables itself cleanly with a message in the log, without crashing. Detection also accepts drivers that report a 3.2 context but expose the required ARB extensions (the case with AMD drivers).
+**OpenGL 4.3 is required.** If your machine does not provide it, the mod disables itself cleanly with a message in the log, without crashing. GSR also checks the driver's SSBO limits (block size, bindings) and logs them with the planned buffer sizes; if they are too low, or if allocation fails, it disables itself with a message in the log naming the config fields to lower (`maxSplatsPerPage`, `pagesX/Y/Z`, `levels`, `ssboBindingBase`) and the game keeps vanilla rendering. Verified only by fault injection on an RX 7800 XT (see below), not on a real low-limit driver. Detection also accepts drivers that report a 3.2 context but expose the required ARB extensions (the case with AMD drivers).
 
 ## Settings, keys and commands
 
@@ -126,6 +127,8 @@ These figures come from a single machine. They say nothing about other GPUs.
 ./gradlew coreSelfTest   # core tests, without Minecraft (52 checks)
 ./gradlew runClient      # launches the game with the mod
 ./gradlew runClient -PwithSodium   # or -PwithIris, to test compatibility
+./gradlew runClient -PgsrFakeMaxSsboBlock=<bytes>   # dev only: fake SSBO block-size limit, to test the clean disable
+./gradlew runClient -PgsrFakeSsboOom                # dev only: fake out-of-memory on SSBO allocation
 ./gradlew gsrTestPack    # assembles the test Iris pack in run/shaderpacks/GSR-TestPack
 ```
 
