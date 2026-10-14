@@ -53,6 +53,10 @@ tasks.named('runClient', JavaExec) {
     if (project.hasProperty('gsrBench')) systemProperty 'gsr.benchRepeat', project.property('gsrBench')
     if (project.hasProperty('gsrBenchOverlap')) systemProperty 'gsr.benchOverlap', 'true'
     if (project.hasProperty('gsrUiTest')) systemProperty 'gsr.uiTest', project.property('gsrUiTest')
+    // Dev fault injection (GsrGpuResources): -PgsrFakeMaxSsboBlock=<bytes> overrides the driver's max SSBO
+    // block size, -PgsrFakeSsboOom simulates GL_OUT_OF_MEMORY on the splat buffer. Both must disable GSR cleanly.
+    if (project.hasProperty('gsrFakeMaxSsboBlock')) systemProperty 'gsr.fakeMaxSsboBlock', project.property('gsrFakeMaxSsboBlock')
+    if (project.hasProperty('gsrFakeSsboOom')) systemProperty 'gsr.fakeSsboOom', 'true'
 }
 
 processResources {

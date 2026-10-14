@@ -1,5 +1,7 @@
 package dev.gsr.render;
 
+import dev.gsr.GsrClient;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -51,6 +53,7 @@ public final class GsrShaderLoader {
             glDeleteShader(sh);
             throw new IllegalStateException("Compilation of " + name + " failed:\n" + log);
         }
+        warnInfoLog(name, "compile", glGetShaderInfoLog(sh));
         int prog = glCreateProgram();
         glAttachShader(prog, sh);
         glLinkProgram(prog);
@@ -60,6 +63,20 @@ public final class GsrShaderLoader {
             glDeleteProgram(prog);
             throw new IllegalStateException("Linking of " + name + " failed:\n" + log);
         }
+        warnInfoLog(name, "link", glGetProgramInfoLog(prog));
         return prog;
+    }
+
+    /** Shader + stage already reported: warnings are logged once per shader, not at every re-init. */
+    private static final Set<String> WARNED = new HashSet<>();
+
+    /**
+     * A successful compile/link can still carry warnings (NVIDIA and Intel report portability issues
+     * that the AMD compiler omits): log them, line numbers refer to the preprocessed source.
+     */
+    private static void warnInfoLog(String name, String stage, String log) {
+        if (log == null || log.isBlank() || !WARNED.add(name + '/' + stage)) return;
+        GsrClient.LOG.warn("GSR: {} of {} succeeded with messages (line numbers refer to the preprocessed source):\n{}",
+                stage, name, log.strip());
     }
 }
